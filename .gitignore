@@ -1,0 +1,42 @@
+# Virtual environments
+backend/venv/
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache and compiled files
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# SQLite Databases & user data directory
+data/
+*.db
+*.db-journal
+*.sqlite3
+
+# Local environment variables
+.env
+.env.*
+
+# Private resume files and local outputs
+baseresume.md
+baseresume.*
+resume.*
+*.pdf
+
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

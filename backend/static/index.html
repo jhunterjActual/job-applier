@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Job Applier Agent</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo-area">
+                <div class="logo-icon"><i class="fa-solid fa-robot"></i></div>
+                <div class="logo-text">JobApplier<span>Agent</span></div>
+            </div>
+            
+            <nav class="nav-menu">
+                <button class="nav-btn active" data-tab="dashboard">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>Dashboard</span>
+                </button>
+                <button class="nav-btn" data-tab="profile">
+                    <i class="fa-solid fa-user-tie"></i>
+                    <span>Profile & Resume</span>
+                </button>
+                <button class="nav-btn" data-tab="search">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <span>Search & Match</span>
+                </button>
+                <button class="nav-btn" data-tab="logs">
+                    <i class="fa-solid fa-clipboard-list"></i>
+                    <span>Application Logs</span>
+                </button>
+            </nav>
+
+            <div class="api-key-badge-container">
+                <div class="api-key-badge" id="api-status">
+                    <span class="status-indicator red"></span>
+                    <span class="status-text">Gemini API Key Missing</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Top Header -->
+            <header class="top-header">
+                <div class="header-title">
+                    <h1 id="page-title">Dashboard Overview</h1>
+                    <p id="page-subtitle">Track your automated job application progress.</p>
+                </div>
+                <div class="user-greeting">
+                    <span id="user-display-name">Candidate</span>
+                    <div class="avatar"><i class="fa-solid fa-user"></i></div>
+                </div>
+            </header>
+
+            <!-- Dashboard Tab -->
+            <section class="tab-pane active" id="tab-dashboard">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon blue"><i class="fa-solid fa-search"></i></div>
+                        <div class="stat-details">
+                            <h3 id="stat-found">0</h3>
+                            <p>Jobs Matched</p>
+                        </div>
+                        <div class="stat-progress-bar blue" style="width: 100%;"></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon purple"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+                        <div class="stat-details">
+                            <h3 id="stat-tailored">0</h3>
+                            <p>Resumes Tailored</p>
+                        </div>
+                        <div class="stat-progress-bar purple" style="width: 100%;"></div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green"><i class="fa-solid fa-paper-plane"></i></div>
+                        <div class="stat-details">
+                            <h3 id="stat-applied">0</h3>
+                            <p>Applications Filed</p>
+                        </div>
+                        <div class="stat-progress-bar green" style="width: 100%;"></div>
+                    </div>
+                </div>
+
+                <div class="dashboard-content-grid">
+                    <div class="card main-card">
+                        <div class="card-header">
+                            <h2>Agent Activity Stream</h2>
+                            <span class="badge">Live</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="timeline" id="activity-timeline">
+                                <div class="timeline-item">
+                                    <div class="timeline-icon"><i class="fa-solid fa-info-circle"></i></div>
+                                    <div class="timeline-content">
+                                        <p class="timeline-title">Agent Initialized</p>
+                                        <p class="timeline-desc">Ready to search and apply. Fill in your profile details to start.</p>
+                                        <span class="timeline-time">Just now</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Profile & Resume Tab -->
+            <section class="tab-pane" id="tab-profile">
+                <div class="settings-grid">
+                    <!-- Left: Contact Details -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>Candidate Information</h2>
+                        </div>
+                        <div class="card-body">
+                            <form id="profile-form" class="form-grid">
+                                <div class="form-group full-width">
+                                    <label for="p-name">Full Name</label>
+                                    <input type="text" id="p-name" placeholder="John Doe" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="p-email">Email Address</label>
+                                    <input type="email" id="p-email" placeholder="john.doe@example.com" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="p-phone">Phone Number</label>
+                                    <input type="tel" id="p-phone" placeholder="+1 (555) 123-4567">
+                                </div>
+                                <div class="form-group">
+                                    <label for="p-github">GitHub Profile URL</label>
+                                    <input type="url" id="p-github" placeholder="https://github.com/johndoe">
+                                </div>
+                                <div class="form-group">
+                                    <label for="p-linkedin">LinkedIn Profile URL</label>
+                                    <input type="url" id="p-linkedin" placeholder="https://linkedin.com/in/johndoe">
+                                </div>
+                                <div class="form-group full-width">
+                                    <label for="p-website">Portfolio / Personal Website</label>
+                                    <input type="url" id="p-website" placeholder="https://johndoe.com">
+                                </div>
+                                <div class="form-group full-width">
+                                    <label for="p-apikey">Gemini API Key</label>
+                                    <div class="password-input-container">
+                                        <input type="password" id="p-apikey" placeholder="Enter API Key (AI-xxxx...)">
+                                        <button type="button" class="toggle-password" id="toggle-api-visibility">
+                                            <i class="fa-solid fa-eye"></i>
+                                        </button>
+                                    </div>
+                                    <small class="form-help">Your API key is stored locally on your machine.</small>
+                                </div>
+                                <div class="form-group full-width">
+                                    <label for="p-google-apikey">Google Maps API Key (Optional)</label>
+                                    <div class="password-input-container">
+                                        <input type="password" id="p-google-apikey" placeholder="Enter Google Maps API Key to conserve Gemini quota">
+                                        <button type="button" class="toggle-password" id="toggle-google-api-visibility">
+                                            <i class="fa-solid fa-eye"></i>
+                                        </button>
+                                    </div>
+                                    <small class="form-help">Uses the Google Places API for headquarters street address resolution if provided.</small>
+                                </div>
+                                <div class="form-actions full-width">
+                                    <button type="submit" class="btn btn-primary" id="save-profile-btn">
+                                        <i class="fa-solid fa-floppy-disk"></i> Save Settings
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Right: Base Resume -->
+                    <div class="card flex-column">
+                        <div class="card-header justify-between">
+                            <h2>Base Resume Content</h2>
+                            <div class="resume-upload-actions">
+                                <label for="resume-file-upload" class="btn btn-secondary btn-sm">
+                                    <i class="fa-solid fa-file-upload"></i> Upload Text File
+                                </label>
+                                <input type="file" id="resume-file-upload" accept=".txt,.md" style="display: none;">
+                            </div>
+                        </div>
+                        <div class="card-body flex-grow flex-column">
+                            <textarea id="p-resume" class="resume-textarea flex-grow" placeholder="Paste your resume content in Plain Text or Markdown format here..." required></textarea>
+                            <small class="form-help margin-top-sm">Using clear headings like 'EXPERIENCE', 'PROJECTS', and 'EDUCATION' helps the LLM tailor it more accurately.</small>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Search & Match Tab -->
+            <section class="tab-pane" id="tab-search">
+                <!-- Search Inputs Card -->
+                <div class="card margin-bottom-md">
+                    <div class="card-body">
+                        <form id="search-form" class="search-bar-grid">
+                            <div class="form-group">
+                                <label for="s-keywords">Job Title / Keywords</label>
+                                <input type="text" id="s-keywords" placeholder="e.g. Software Engineer (leave blank to auto-suggest)">
+                            </div>
+                            <div class="form-group">
+                                <label for="s-location">Location (Optional)</label>
+                                <input type="text" id="s-location" placeholder="e.g. San Francisco, CA; New York, NY; Remote (separated by semicolons)">
+                            </div>
+                            <div class="form-actions align-end">
+                                <button type="submit" class="btn btn-primary btn-block" id="search-jobs-btn">
+                                    <i class="fa-solid fa-paper-plane"></i> Search & Analyze
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Job Match Results Table -->
+                <div class="card">
+                    <div class="card-header justify-between">
+                        <h2>Discovered Job Postings</h2>
+                        <button class="btn btn-secondary btn-sm" id="refresh-jobs-btn">
+                            <i class="fa-solid fa-rotate"></i> Refresh
+                        </button>
+                    </div>
+                    <div class="card-body no-padding">
+                        <div class="table-responsive">
+                            <table class="data-table" id="jobs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Position</th>
+                                        <th>Match Score</th>
+                                        <th>Link</th>
+                                        <th>Status</th>
+                                        <th class="actions-col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td colspan="6" class="table-empty-state">
+                                            <i class="fa-solid fa-briefcase"></i>
+                                            <p>No job postings found yet. Run a search to match jobs with your resume.</p>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Application Logs Tab -->
+            <section class="tab-pane" id="tab-logs">
+                <div class="card">
+                    <div class="card-header justify-between">
+                        <h2>Application Submission History</h2>
+                        <button class="btn btn-secondary btn-sm" id="refresh-logs-btn">
+                            <i class="fa-solid fa-rotate"></i> Refresh History
+                        </button>
+                    </div>
+                    <div class="card-body no-padding">
+                        <div class="table-responsive">
+                            <table class="data-table" id="logs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Position Title</th>
+                                        <th>Application Date</th>
+                                        <th>U.S. Headquarters</th>
+                                        <th>Status</th>
+                                        <th>Files</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td colspan="6" class="table-empty-state">
+                                            <i class="fa-solid fa-paper-plane"></i>
+                                            <p>No jobs submitted yet. Tailor and apply from the "Search & Match" tab.</p>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <!-- Tailoring Modal -->
+    <div class="modal" id="tailor-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Review Tailored Application Materials</h2>
+                <button class="close-modal-btn" id="close-tailor-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-tabs">
+                    <button class="modal-tab-btn active" data-modal-tab="tailored-resume">Tailored Resume</button>
+                    <button class="modal-tab-btn" data-modal-tab="cover-letter">Cover Letter</button>
+                </div>
+                
+                <div class="modal-tab-content active" id="modal-tab-tailored-resume">
+                    <div class="material-container">
+                        <textarea id="tailored-resume-display" class="materials-textarea" readonly></textarea>
+                    </div>
+                </div>
+                <div class="modal-tab-content" id="modal-tab-cover-letter">
+                    <div class="material-container">
+                        <textarea id="cover-letter-display" class="materials-textarea" readonly></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer justify-between">
+                <div class="applying-mode-options">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="applying-headed-checkbox" checked>
+                        <span class="slider round"></span>
+                    </label>
+                    <span class="toggle-label">Watch Application in Browser (Headed Mode)</span>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="close-tailor-modal-btn">Cancel</button>
+                    <button class="btn btn-primary" id="apply-job-confirm-btn">
+                        <i class="fa-solid fa-rocket"></i> Submit Application Now
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading / Applying Modal -->
+    <div class="modal modal-sm" id="loading-modal">
+        <div class="modal-content text-center">
+            <div class="spinner-container">
+                <div class="dual-ring-spinner"></div>
+            </div>
+            <h3 id="loading-title">Processing Request...</h3>
+            <p id="loading-subtitle" class="text-muted">Please wait while the AI handles the paperwork.</p>
+        </div>
+    </div>
+    
+    <!-- Custom JS -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

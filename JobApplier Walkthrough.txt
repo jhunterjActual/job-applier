@@ -1,0 +1,75 @@
+# Walkthrough - AI Job Search & Application Agent
+
+We have built a state-of-the-art, self-contained AI Job Search & Application Agent in the `jobapplier` directory. The application consists of a **FastAPI backend** that doubles as a static file server to deliver a **custom, premium dark-mode dashboard** without needing Node.js/NPM.
+
+---
+
+## 🌟 Key Features Implemented
+
+1. **Dashboard & UI Interface**:
+   - High-fidelity dark mode styling, card glow, and clean fonts.
+   - Live timeline activity stream reporting browser automation logs.
+   - Status indicators verifying Gemini API key connectivity.
+2. **AI Resume & Cover Letter Tailoring (`tailor.py`)**:
+   - Integrates with Gemini (`gemini-2.5-flash`) to parse base resumes and job descriptions.
+   - Generates tailored resumes in Markdown and crafts customized cover letters.
+   - Converts Markdown resumes and cover letters into clean, print-ready PDF files using Playwright.
+3. **Automated Browser Applier (`applier.py`)**:
+   - Navigates Greenhouse, Lever, and other job boards.
+   - Dynamically extracts interactive inputs, textareas, selects, and file uploads.
+   - Uses the Gemini API to analyze fields and match candidate profile data to form inputs.
+   - Autonomously types text, makes dropdown selections, and uploads PDFs (with support for **Headed mode** so you can watch the agent apply in real-time).
+4. **Job Posting Search & Match Crawler (`searcher.py`)**:
+   - DuckDuckGo crawling to find Lever & Greenhouse links matching target keywords.
+   - Automated profile matching score (0-100%) and key bulleted match analyses.
+5. **Applications Database & Logging (`database.py`, `utils.py`)**:
+   - Tracks found jobs and matches.
+   - Automatically queries Gemini to find the U.S. Headquarters location of companies.
+   - Logs: Company name, Position title, Date applied, U.S. Headquarters location, Status, and downloadable PDF resume files.
+
+---
+
+## 🚀 How to Run the Application
+
+You can start the application using the preconfigured startup scripts:
+
+### Option A: Using Windows PowerShell (Recommended)
+1. Open PowerShell and navigate to the project directory:
+   ```powershell
+   cd c:\Users\hunte\Documents\Antigravity\jobapplier
+   ```
+2. Run the start script:
+   ```powershell
+   .\run.ps1
+   ```
+
+### Option B: Using Batch File
+- Double-click [run.bat](file:///c:/Users/hunte/Documents/Antigravity/jobapplier/run.bat) in the `jobapplier` folder.
+
+The script will automatically activate the Python virtual environment, start the FastAPI server on port `8000`, and open the dashboard in your default browser at:
+👉 **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
+
+---
+
+## 🛠️ Step-by-Step Usage Guide
+
+1. **Configure Your Profile**:
+   - Click the **Profile & Resume** tab in the dashboard.
+   - Enter your contact details, personal links (GitHub, LinkedIn, Portfolio), and paste your **Gemini API Key**.
+   - Copy-paste your base resume text or upload a `.txt`/`.md` resume file.
+   - Click **Save Settings**.
+2. **Search for Jobs**:
+   - Go to the **Search & Match** tab.
+   - Enter job keywords (e.g., `"React Developer Remote"`) and location.
+   - Click **Search & Analyze**.
+   - The browser agent will query DuckDuckGo and display matching job postings along with a match score (e.g. `85%`) and key pros/cons.
+3. **Tailor Materials**:
+   - Click **Tailor Materials** next to a matched job.
+   - The AI will generate a tailored PDF resume and cover letter.
+   - Click **View Materials** to review the tailored cover letter text and check the output path of the resume.
+4. **Submit Application**:
+   - Check the **Watch Application in Browser** toggle (headed mode) if you want to watch the agent fill out the form.
+   - Click **Submit Application Now**.
+   - A Chromium browser window will pop up, auto-fill all text inputs, select dropdowns, attach the tailored resume PDF, and submit the application.
+5. **View Logs**:
+   - Inspect the **Application Logs** tab to view your log history detailing Company, Position, Application Date, and U.S. Headquarters, and download the tailored resume PDFs directly!
