@@ -1,7 +1,29 @@
 import json
+import re
+from datetime import date
 from google import genai
 from google.genai import types
 from config import get_gemini_api_key
+
+
+def format_cover_letter_date(value: date) -> str:
+    """Format dates without platform-specific strftime day directives."""
+    return f"{value.strftime('%B')} {value.day}, {value.year}"
+
+
+def finalize_cover_letter(cover_letter: str, letter_date: date | None = None) -> str:
+    """Resolve date tokens so unfinished template text is never delivered."""
+    text = (cover_letter or "").strip()
+    if not text:
+        raise ValueError("Gemini returned an empty cover letter.")
+
+    concrete_date = format_cover_letter_date(letter_date or date.today())
+    text = re.sub(r"(?i)\[\s*date\s*\]", concrete_date, text)
+    text = re.sub(r"(?i)\{\s*date\s*\}", concrete_date, text)
+    text = re.sub(r"(?i)<\s*date\s*>", concrete_date, text)
+    if re.search(r"(?i)\[\s*(?:insert\s+)?date\s*(?:here)?\s*\]", text):
+        raise ValueError("The generated cover letter contains an unresolved date placeholder.")
+    return text
 
 def get_client(api_key: str = None) -> genai.Client:
     """
@@ -19,7 +41,86 @@ def get_client(api_key: str = None) -> genai.Client:
         raise ValueError("Gemini API key is not configured. Please set GEMINI_API_KEY environment variable or enter it in settings.")
     return genai.Client(api_key=key)
 
-def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, company_name: str, job_description: str, api_key: str = None) -> dict:
+RESUME_MODE_GUIDANCE = {
+    "it": "Emphasize technical depth, architecture, delivery outcomes, platforms, and relevant tools without keyword stuffing.",
+    "technical_executive": "Lead with enterprise scope, transformation outcomes, operating model, governance, budgets, and leadership impact.",
+    "general_professional": "Use broadly applicable accomplishment-focused language and a conventional reverse-chronological structure.",
+    "federal": "Use detailed duty scope, month/year dates, hours where known, and qualification evidence; do not invent federal-specific facts.",
+    "healthcare": "Prioritize licenses, patient or operational outcomes, compliance, safety, and domain systems when evidenced.",
+    "education": "Prioritize teaching, curriculum, learner outcomes, credentials, research, and service when evidenced.",
+    "sales": "Prioritize quota, revenue, pipeline, territory, retention, and customer outcomes when evidenced.",
+    "trades_operations": "Prioritize licenses, safety, equipment, throughput, quality, scheduling, and hands-on scope when evidenced.",
+    "academic_cv": "Use an academic CV structure and retain relevant publications, research, teaching, grants, and service; the two-page resume limit does not apply.",
+    "cover_letter": "Keep the resume conventional while placing extra emphasis on a specific, persuasive cover letter.",
+}
+
+RESUME_SECTION_TEMPLATES = {
+    "it": ("Summary", "Technical Skills", "Professional Experience", "Projects", "Certifications", "Education"),
+    "technical_executive": ("Executive Summary", "Leadership Competencies", "Professional Experience", "Board & Advisory", "Education", "Certifications"),
+    "general_professional": ("Professional Summary", "Core Skills", "Professional Experience", "Projects", "Certifications", "Education"),
+    "federal": ("Summary of Qualifications", "Core Competencies", "Professional Experience", "Education", "Certifications"),
+    "healthcare": ("Professional Summary", "Licenses & Certifications", "Professional Experience", "Skills", "Education"),
+    "education": ("Professional Summary", "Credentials", "Teaching Experience", "Education", "Research & Publications", "Service"),
+    "sales": ("Professional Summary", "Sales Competencies", "Professional Experience", "Achievements", "Education"),
+    "trades_operations": ("Summary", "Licenses & Certifications", "Skills", "Professional Experience", "Education"),
+    "academic_cv": ("Education", "Academic Appointments", "Research", "Publications", "Teaching", "Grants & Awards", "Service", "Professional Experience"),
+    "cover_letter": ("Professional Summary", "Core Skills", "Professional Experience", "Projects", "Certifications", "Education"),
+}
+
+
+def _canonical_section(title: str, template: tuple[str, ...]) -> str | None:
+    normalized = re.sub(r"[^a-z& ]", "", title.lower()).strip()
+    exact = {section.lower(): section for section in template}
+    if normalized in exact:
+        return exact[normalized]
+    semantic = (
+        (("summary", "profile", "objective", "qualifications"), ("summary", "qualifications")),
+        (("skill", "competenc", "expertise", "technolog"), ("skill", "competenc")),
+        (("experience", "employment", "career"), ("experience", "appointments")),
+        (("project",), ("project",)),
+        (("certif", "license", "credential"), ("certif", "license", "credential")),
+        (("education",), ("education",)),
+        (("publication",), ("publication",)),
+        (("research",), ("research",)),
+        (("teaching",), ("teaching",)),
+        (("grant", "award", "achievement"), ("grant", "award", "achievement")),
+        (("board", "advisory", "service"), ("board", "advisory", "service")),
+    )
+    for source_terms, target_terms in semantic:
+        if any(term in normalized for term in source_terms):
+            match = next((section for section in template if any(term in section.lower() for term in target_terms)), None)
+            if match:
+                return match
+    return None
+
+
+def apply_resume_section_template(markdown: str, resume_mode: str) -> str:
+    """Normalize generated level-two sections into a deterministic mode order."""
+    template = RESUME_SECTION_TEMPLATES.get(resume_mode, RESUME_SECTION_TEMPLATES["general_professional"])
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", markdown))
+    if not matches:
+        raise ValueError("Tailored resume did not contain the required Markdown sections.")
+    preamble = markdown[:matches[0].start()].rstrip()
+    grouped: dict[str, list[str]] = {}
+    unknown = []
+    for index, match in enumerate(matches):
+        body_end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        body = markdown[match.end():body_end].strip()
+        canonical = _canonical_section(match.group(1), template)
+        if not canonical:
+            unknown.append(match.group(1).strip())
+            continue
+        if body:
+            grouped.setdefault(canonical, []).append(body)
+    if unknown:
+        raise ValueError(f"Tailored resume used unsupported section(s) for {resume_mode}: {', '.join(unknown)}")
+    if not grouped:
+        raise ValueError("Tailored resume sections were empty.")
+    sections = [f"## {section}\n\n" + "\n\n".join(grouped[section]) for section in template if section in grouped]
+    return "\n\n".join(([preamble] if preamble else []) + sections).strip()
+
+
+def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, company_name: str, job_description: str, api_key: str = None, resume_mode: str = "general_professional") -> dict:
     """
     Consolidates resume tailoring and cover letter drafting into a single Gemini request
     to conserve daily API limits, returning the customized materials as JSON.
@@ -39,12 +140,33 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
     except Exception as e:
         return {"error": str(e)}
 
+    letter_date = date.today()
+    formatted_letter_date = format_cover_letter_date(letter_date)
+    mode_guidance = RESUME_MODE_GUIDANCE.get(resume_mode, RESUME_MODE_GUIDANCE["general_professional"])
+    section_template = RESUME_SECTION_TEMPLATES.get(resume_mode, RESUME_SECTION_TEMPLATES["general_professional"])
+    page_contract = "The academic CV may exceed two pages when the evidenced content requires it." if resume_mode == "academic_cv" else "The resume must fit within two US Letter pages at 10-point type."
+
     # Combine resume tailoring and cover letter writing into a single prompt
     # and use JSON output to reduce daily Gemini API requests from 2 to 1.
     prompt = f"""
-    You are an expert technical resume writer and career coach. Your task is to perform two actions for a candidate applying to a job:
-    1. Tailor their base resume to match the job requirements, emphasizing matching skills, projects, and work experience. Maintain absolute factual accuracy: DO NOT invent fake jobs, fake degrees, or fake companies. Keep a clean, professional, and well-structured Markdown format.
+    You are an expert resume writer and career coach for both technical and non-technical professions. Your task is to perform two actions for a candidate applying to a job:
+    1. Tailor their base resume to match the job requirements, emphasizing only relevant, evidenced skills, projects, and work experience. Maintain absolute factual accuracy: DO NOT invent jobs, dates, degrees, credentials, technologies, metrics, or companies.
     2. Write a customized, compelling, and professional cover letter (under 350 words, 3-4 paragraphs) addressed to the hiring team at {company_name}.
+
+    Cover-letter contract:
+    - Use the concrete date "{formatted_letter_date}" in the letter heading.
+    - Never emit [Date], {{Date}}, <Date>, or any other placeholder token.
+    - When a hiring manager's name is unknown, address the letter to "Hiring Team" without a placeholder.
+
+    Resume formatting contract:
+    - Selected resume mode: {resume_mode}. Mode guidance: {mode_guidance}
+    - Use only the applicable level-two sections from this exact ordered template, omitting empty sections: {"; ".join(section_template)}.
+    - {page_contract}
+    - Use only standard Markdown headings (#, ##, ###), paragraphs, bold/italics, and flat bullet lists.
+    - Do not use horizontal rules, tables, columns, images, badges, skill ratings, or decorative symbols.
+    - Use conventional section names appropriate to the profession, such as Summary, Skills, Experience, Projects, Licenses, Certifications, and Education.
+    - Limit the summary to 3-4 lines. Use at most 4-6 concise bullets for the most recent role and 2-3 for older roles. Each bullet should normally fit in 1-2 lines.
+    - Prefer demonstrated outcomes over keyword repetition. Remove or compress older and irrelevant material instead of shrinking the text.
     
     Job Details:
     - Job Title: {job_title}
@@ -74,7 +196,7 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
         
         res_data = json.loads(response.text.strip(), strict=False)
         tailored_resume = res_data.get("tailored_resume", "").strip()
-        cover_letter = res_data.get("cover_letter", "").strip()
+        cover_letter = finalize_cover_letter(res_data.get("cover_letter", ""), letter_date)
 
         # Clean up markdown tags if the model still wrapped them (rare for JSON output)
         if tailored_resume.startswith("```markdown"):
@@ -84,6 +206,7 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
         if tailored_resume.endswith("```"):
             tailored_resume = tailored_resume[:-3]
         tailored_resume = tailored_resume.strip()
+        tailored_resume = apply_resume_section_template(tailored_resume, resume_mode)
 
         return {
             "success": True,

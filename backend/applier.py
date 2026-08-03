@@ -1,11 +1,64 @@
 import os
 import json
-import time
-from playwright.sync_api import sync_playwright
-from google import genai
-from google.genai import types
+import re
+from pathlib import Path
 from config import get_gemini_api_key
-from database import get_db_connection
+
+SENSITIVE_FIELD_PATTERNS = (
+    r"citizen(ship)?", r"work authori[sz]ation", r"visa|sponsor(ship)?",
+    r"salary|compensation|pay expectation", r"race|ethnic|gender|sex(ual)?|pronoun",
+    r"disab|veteran|military status", r"criminal|conviction|background check",
+    r"drug test|credit check", r"agree|consent|certif(y|ication)|signature",
+)
+
+CONFIRMATION_PATTERNS = (
+    r"thank you for (applying|your application)",
+    r"application (has been )?(submitted|received)",
+    r"we('ve| have) received your application",
+    r"submission (confirmed|complete|successful)",
+)
+
+
+def field_requires_review(field: dict) -> bool:
+    """Return True for questions that automation must not infer or guess."""
+    text = " ".join(str(field.get(key, "")) for key in ("label", "name", "placeholder"))
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in SENSITIVE_FIELD_PATTERNS)
+
+
+def build_cover_letter_upload_path(tailored_resume_path: str) -> Path:
+    """Build a cover-letter path that can never alias the generated resume."""
+    resume_path = Path(tailored_resume_path)
+    cover_path = resume_path.with_name(f"{resume_path.stem}_cover_letter.txt")
+    if cover_path.resolve() == resume_path.resolve():
+        raise ValueError("Cover-letter upload path must differ from resume path.")
+    return cover_path
+
+
+def _confirmation_markers(page) -> set[str]:
+    try:
+        body_text = page.locator("body").inner_text(timeout=5000)[:30000]
+    except Exception:
+        return set()
+    return {
+        pattern for pattern in CONFIRMATION_PATTERNS
+        if re.search(pattern, body_text, flags=re.IGNORECASE)
+    }
+
+
+def detect_submission_confirmation(
+    page,
+    previous_url: str,
+    previous_markers: set[str] | None = None,
+) -> tuple[bool, str]:
+    """Look for destination-provided evidence that a submission was accepted."""
+    current_url = page.url
+    baseline = previous_markers or set()
+    for pattern in _confirmation_markers(page):
+        if pattern not in baseline:
+            return True, f"confirmation_text:{pattern}"
+    if current_url != previous_url and re.search(r"thank|confirm|success|submitted", current_url, re.IGNORECASE):
+        return True, f"confirmation_url:{current_url}"
+    return False, ""
 
 def extract_form_fields(page) -> list:
     """
@@ -146,8 +199,13 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
     key = api_key or get_gemini_api_key()
     if not key:
         return {"success": False, "error": "Gemini API key is required to fill out forms."}
-        
+
+    from google import genai
+    from google.genai import types
+    from playwright.sync_api import sync_playwright
+
     client = genai.Client(api_key=key)
+    temporary_files: list[Path] = []
     
     with sync_playwright() as p:
         # Open browser in headed mode by default so the user can watch the automation!
@@ -213,6 +271,11 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
             
             # Extract form structure
             fields = extract_form_fields(page)
+            if not fields:
+                return {
+                    "success": False,
+                    "error": "No application form fields were found. The application was not submitted.",
+                }
             
             # Construct AI Prompt to map form fields to candidates details
             prompt = f"""
@@ -234,18 +297,19 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
             3. "check": Check a checkbox or radio. Provide "value" as boolean true.
             4. "upload_resume": Upload the resume file.
             5. "upload_cover_letter": Upload a cover letter file (or fill the text area if it's a cover letter textbox).
-            6. "ignore": Do not interact (e.g. for already filled fields, read-only labels, or sections we don't have details for).
+            6. "review": Leave the field untouched for human review.
+            7. "ignore": Do not interact (e.g. for already filled fields, read-only labels, or sections we don't have details for).
             
-            Keep in mind:
-            - For custom questions (salary, authorization, visa, ethnicity, etc.), use the profile details or make an intelligent standard choice (e.g. Authorized to work: Yes, Require Sponsorship: No, unless specified otherwise in the profile).
-            - Salary expectations: Use profile info, or if empty and mandatory, use standard market rates e.g. "Competitive".
+            Safety rules:
+            - Never infer or guess answers about work authorization, citizenship, sponsorship, salary, protected demographics, disability, veteran status, criminal history, consent, certifications, or signatures. Use "review" for those fields unless an exact answer is explicitly present in the candidate profile.
+            - Never make a fallback dropdown choice. Use "review" when no exact option matches.
             
             Output a JSON list of objects:
             [
               {{
                 "selector": "CSS selector of the field",
                 "label": "The label of the field",
-                "action": "type | select | check | upload_resume | upload_cover_letter | ignore",
+                "action": "type | select | check | upload_resume | upload_cover_letter | review | ignore",
                 "value": "the string/bool value to input, or null"
               }},
               ...
@@ -264,12 +328,21 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
             
             actions = json.loads(response.text.strip(), strict=False)
             
+            fields_by_selector = {field.get("selector"): field for field in fields}
+            fields_needing_review = []
+
             # Execute actions in the browser
             for act in actions:
                 selector = act["selector"]
                 action = act["action"]
-                val = act["value"]
-                label = act["label"]
+                val = act.get("value")
+                label = act.get("label", selector)
+
+                field = fields_by_selector.get(selector, {"label": label})
+                if action == "review" or field_requires_review(field):
+                    fields_needing_review.append(label)
+                    print(f"Review required: {label}")
+                    continue
                 
                 print(f"Action: {action} on {label} ({selector})")
                 
@@ -278,6 +351,7 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
                     elem = page.query_selector(selector)
                     if not elem:
                         print(f"  Element not found: {selector}")
+                        fields_needing_review.append(label)
                         continue
                         
                     elem.scroll_into_view_if_needed()
@@ -308,10 +382,9 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
                                 
                         if matching_val is not None:
                             page.select_option(selector, value=matching_val)
-                        elif options_list:
-                            # Fallback to the first option if no match and it's a required select
-                            # (avoid leaving select empty if possible)
-                            page.select_option(selector, index=1) # index 0 is usually the placeholder e.g. "Select..."
+                        else:
+                            fields_needing_review.append(label)
+                            print(f"  No exact dropdown match; review required: {label}")
                             
                     elif action == "check":
                         if val:
@@ -326,6 +399,7 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
                             print(f"  Uploaded resume PDF: {tailored_resume_path}")
                         else:
                             print(f"  Resume PDF not found: {tailored_resume_path}")
+                            fields_needing_review.append(label)
                             
                     elif action == "upload_cover_letter":
                         # Check if this is a file upload or a text area
@@ -336,52 +410,64 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
                             elem.fill(cover_letter_text)
                             print("  Filled cover letter text area.")
                         elif elem_type == "file":
-                            # We need to write the cover letter to a temporary text/pdf file and upload it
-                            temp_cl_path = tailored_resume_path.replace("_resume.pdf", "_cover_letter.txt")
-                            with open(temp_cl_path, "w", encoding="utf-8") as f:
+                            # Use a distinct temporary path; never overwrite the resume PDF.
+                            temp_cl_path = build_cover_letter_upload_path(tailored_resume_path)
+                            with temp_cl_path.open("w", encoding="utf-8") as f:
                                 f.write(cover_letter_text)
-                            page.set_input_files(selector, temp_cl_path)
+                            temporary_files.append(temp_cl_path)
+                            page.set_input_files(selector, str(temp_cl_path))
                             print(f"  Uploaded cover letter file: {temp_cl_path}")
                             
                 except Exception as ex:
                     print(f"  Failed to execute action on {label}: {ex}")
+                    fields_needing_review.append(label)
             
             # Let the browser pause briefly for user satisfaction or captcha checks
             page.wait_for_timeout(5000)
             
-            # Wait for human review (Headed mode) or submit
-            # For safety, we DO NOT click the submit button automatically unless specified.
-            # Instead, we return success so the user can hit the "Submit" button in the browser window,
-            # or we can auto-submit if Lever/Greenhouse is easy.
-            # Let's check if the page contains a submit button.
-            # We will return the browser open in headed mode, but since this runs on backend,
-            # wait! If the backend runs headed browser, it will block. So let's allow a manual delay or just auto-submit if requested.
-            # Actually, to make it fully automated but safe, we can try to click the submit button.
-            # The submit button is typically: button[type=submit] or #submit-button
-            # Let's wait a few seconds and auto-click the submit button if the user wanted auto-submit.
-            # Otherwise, we let them click it.
-            # Let's do a short sleep so the user can verify, then click submit!
-            
+            # Submit only when every requested action completed without requiring
+            # human judgment. Any review item makes this a fill-only run.
             submit_selectors = ["button[type=submit]", "#submit-button", "#submit_app", "input[type=submit]"]
             clicked_submit = False
+            submission_confirmed = False
+            submission_evidence = ""
             
             # Auto-submit
             for sel in submit_selectors:
+                if fields_needing_review:
+                    break
                 submit_btn = page.query_selector(sel)
                 if submit_btn:
                     # Let's wait 2 seconds before clicking
                     page.wait_for_timeout(2000)
+                    previous_url = page.url
+                    previous_markers = _confirmation_markers(page)
                     submit_btn.click()
                     clicked_submit = True
                     print(f"Clicked submit button: {sel}")
                     # Wait for redirect/success page
                     page.wait_for_timeout(5000)
+                    submission_confirmed, submission_evidence = detect_submission_confirmation(
+                        page, previous_url, previous_markers
+                    )
                     break
             
             return {
                 "success": True,
                 "auto_submitted": clicked_submit,
-                "msg": "Application filled and submitted successfully!" if clicked_submit else "Application filled. Please review and click Submit in the browser."
+                "submission_attempted": clicked_submit,
+                "submission_confirmed": submission_confirmed,
+                "submission_evidence": submission_evidence,
+                "fields_needing_review": sorted(set(fields_needing_review)),
+                "msg": (
+                    "Application submission was confirmed by the destination site."
+                    if submission_confirmed
+                    else (
+                        "The form was filled but not submitted because one or more fields require review."
+                        if fields_needing_review
+                        else "The form was filled, but submission was not confirmed. Review the application status before treating it as applied."
+                    )
+                )
             }
             
         except Exception as e:
@@ -394,3 +480,8 @@ def fill_application_form(url: str, candidate_profile: dict, tailored_resume_pat
                 # Keep it open for 5 more seconds then close
                 page.wait_for_timeout(5000)
                 browser.close()
+            for temp_path in temporary_files:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass

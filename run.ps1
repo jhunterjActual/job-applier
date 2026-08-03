@@ -1,63 +1,78 @@
 # Start Script for AI Job Applier Agent
+$ErrorActionPreference = "Stop"
+
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "   Starting AI Job Applier Agent...       " -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
-# Change directory to backend
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location "$ScriptDir\backend"
+$BackendDir = Join-Path $ScriptDir "backend"
+$VenvDir = Join-Path $BackendDir "venv"
+$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+Set-Location $BackendDir
 
-# Check if venv exists
-if (-not (Test-Path "venv")) {
-    Write-Host "Virtual environment 'venv' not found. Starting automatic setup..." -ForegroundColor Yellow
-    
-    # Check if python is installed
-    if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
-        Write-Host "Error: Python is not installed or not in your PATH. Please install Python 3.10+." -ForegroundColor Red
-        Exit
+function Test-PythonExecutable([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        & $Path --version *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
     }
-    
-    Write-Host "Creating virtual environment..." -ForegroundColor Yellow
-    python -m venv venv
-    if (-not $?) {
-        Write-Host "Failed to create virtual environment." -ForegroundColor Red
-        Exit
-    }
-    
-    Write-Host "Activating virtual environment..." -ForegroundColor Yellow
-    & ".\venv\Scripts\Activate.ps1"
-    
-    Write-Host "Installing dependencies from requirements.txt..." -ForegroundColor Yellow
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-    if (-not $?) {
-        Write-Host "Failed to install Python dependencies." -ForegroundColor Red
-        Exit
-    }
-    
-    Write-Host "Installing Playwright browsers..." -ForegroundColor Yellow
-    playwright install chromium
-    if (-not $?) {
-        Write-Host "Failed to install Playwright browser." -ForegroundColor Red
-        Exit
-    }
-    
-    Write-Host "Setup complete!" -ForegroundColor Green
-} else {
-    # Activate virtual environment
-    Write-Host "Activating virtual environment..." -ForegroundColor Yellow
-    & ".\venv\Scripts\Activate.ps1"
 }
 
-# Launch Browser in the background after server starts
+function Find-BootstrapPython {
+    $candidates = @()
+    $pathPython = Get-Command "python" -ErrorAction SilentlyContinue
+    if ($pathPython) { $candidates += $pathPython.Source }
+    $candidates += Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+
+    foreach ($candidate in $candidates) {
+        if (Test-PythonExecutable $candidate) { return $candidate }
+    }
+    return $null
+}
+
+if (-not (Test-PythonExecutable $VenvPython)) {
+    Write-Host "The project virtual environment is missing or invalid. Repairing it..." -ForegroundColor Yellow
+    $BootstrapPython = Find-BootstrapPython
+    if (-not $BootstrapPython) {
+        Write-Host "Error: A working Python 3.10+ installation was not found." -ForegroundColor Red
+        Write-Host "Install Python from python.org, then run this script again." -ForegroundColor Red
+        Exit 1
+    }
+
+    & $BootstrapPython -m venv --clear $VenvDir
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create the virtual environment." }
+
+    & $VenvPython -m pip install --upgrade pip
+    & $VenvPython -m pip install -r requirements.txt
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install Python dependencies." }
+
+    & $VenvPython -m playwright install chromium
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install the Playwright browser." }
+    Write-Host "Environment repair complete." -ForegroundColor Green
+}
+
+Write-Host "Python environment verified." -ForegroundColor Green
+
+# Open the UI only after the backend responds, so a failed launch cannot leave
+# a misleading cached dashboard in the browser.
 Start-ThreadJob {
-    Start-Sleep -Seconds 3
-    Write-Host "Opening Dashboard UI in your browser..." -ForegroundColor Green
-    Start-Process "http://127.0.0.1:8000/"
-}
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        Start-Sleep -Seconds 1
+        try {
+            $version = Invoke-RestMethod "http://127.0.0.1:8000/api/version" -TimeoutSec 1
+            if ($version.build -eq "20260803.8") {
+                Start-Process "http://127.0.0.1:8000/?build=20260803.8"
+                return
+            }
+        } catch { }
+    }
+    Write-Host "The backend did not become ready; the dashboard was not opened." -ForegroundColor Red
+} | Out-Null
 
-# Run FastAPI server
 Write-Host "Launching FastAPI Backend..." -ForegroundColor Yellow
 Write-Host "Access the Dashboard at http://127.0.0.1:8000/" -ForegroundColor Green
 Write-Host "Press Ctrl+C to shut down the agent." -ForegroundColor Magenta
-uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+& $VenvPython -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload

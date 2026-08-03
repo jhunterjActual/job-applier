@@ -1,0 +1,65 @@
+# Product Backlog
+
+This backlog consolidates the code-review, job-seeker persona, product-owner, monetization, and resume/PDF-formatting recommendations.
+
+## P0 - Reliability, safety, and document integrity
+
+- [x] Prevent cover-letter upload files from overwriting tailored resume PDFs.
+- [x] Distinguish `form_filled`, unverified `submitted`, and destination-confirmed `applied` states.
+- [x] Record lifecycle timestamps and submission evidence without treating tailoring as an application date.
+- [x] Require human review for sensitive questions and unmatched dropdown values; never guess fallback answers.
+- [x] Add regression coverage for lifecycle mapping, sensitive fields, upload paths, and safe Markdown rendering.
+- [x] Enforce a two-page resume contract, with a compact rendering retry and a hard rejection instead of truncation.
+- [x] Prevent experience entries and individual bullets from splitting across pages when the entry fits on one page.
+- [x] Escape untrusted resume content and correctly handle headings, bullets, bold, italics, and separators.
+- [x] Use role-neutral resume-writing instructions with concise summary and bullet limits.
+
+## P1 - Core workflow and security
+
+- [x] Mark a job as manually applied from either matched or tailored state, with an editable application date and method.
+- [x] Fix lifecycle date-field accessibility and usability: keep all date segments legible while one segment is selected, preserve visible focus/selection contrast in the dark theme, and provide a date control supporting both calendar selection and validated direct text entry.
+- [x] Preview and bulk archive or delete untouched jobs while preserving generated materials and application history.
+- [x] Add reversible archive/restore recovery for bulk cleanup.
+- [x] Add undo/recovery for other lifecycle corrections.
+- [x] Replace frontend `innerHTML` interpolation of job data with safe DOM construction and validated links.
+- [x] Stop returning plaintext API keys from profile reads; mask keys and use dedicated secret-update operations.
+- [x] Restrict CORS and define the supported local-only deployment threat model.
+- [x] Add pipeline statuses with notes, follow-up dates, interviews, offers, rejections, withdrawals, and closed roles.
+- [x] Add saved searches, duplicate detection, and on-demand expired-posting checks.
+- [x] Add optional scheduled alerts for saved searches.
+- [x] Detect job-source format drift using provider health checks, expected content/selector contracts, and rejection-rate baselines; alert the user when a provider appears incompatible instead of silently returning no results, including a safe diagnostic summary and affected provider.
+- [x] Add sortable/filterable job results with status and a user-adjustable minimum match-score control.
+- [x] Enrich job results with normalized location, work arrangement, compensation, date found, and source fields.
+- [x] Add editable resume and cover-letter preview with PDF regeneration before applying.
+- [x] Add deterministic section templates before PDF generation.
+- [x] Add IT, technical-executive, general-professional, federal, healthcare, education, sales, trades/operations, academic-CV, and cover-letter modes.
+
+## P2 - Broader job-seeker value
+
+- [ ] Polish the cleanup-preview modal action bar: prevent Restore counts and labels from wrapping awkwardly, use consistent button sizing and icon alignment, establish a clearer primary/secondary/destructive hierarchy, and stack actions cleanly at narrow widths.
+- [ ] Support multiple base resumes and version history.
+- [ ] Import DOCX/PDF resumes with OCR fallback and export an accessible DOCX alternative.
+- [ ] Add compensation, contract-rate, shift, travel, commute, sponsorship, clearance, license, and work-condition filters.
+- [ ] Add role-specific skills, projects, portfolios, licenses, certifications, and work-sample sections.
+- [ ] Add interview preparation and response-rate analytics by source, role, location, resume version, and application method.
+- [ ] Add multilingual assistance, mobile responsiveness, accessibility QA, encrypted backup, restore, and data export.
+- [ ] Design an opt-in, privacy-preserving provider-failure reporting mechanism for broader releases so repeated format-drift alerts can notify maintainers without transmitting resumes, API keys, job-application data, or unnecessary browsing details.
+- [ ] Add recruiter, hiring-manager, referral, assessment, and networking tracking.
+- [ ] Add PDF metadata, accessible document semantics, clickable contact links, and recruiter-friendly filenames.
+
+## P3 - Integrations, growth, and monetization enablement
+
+- [ ] Add email and calendar integrations for interviews and follow-ups.
+- [ ] Add a browser extension or bookmarklet for saving jobs and assisting applications.
+- [ ] Add team administration, billing, usage metering, and institutional reporting.
+- [ ] Offer a privacy-first freemium plan, short-duration Pro passes, BYOK Pro, and optional AI credit packs.
+- [ ] Evaluate coaching/resume-review marketplace, workforce-development licensing, and white-label institutional editions.
+- [ ] Add clearly disclosed ethical affiliate programs without allowing payments to affect job ranking.
+
+## Product principles
+
+- A clicked submit button is not proof that an application was accepted.
+- Automation must not invent credentials, experience, sensitive answers, or consent.
+- Preserve user history by default; archive before permanent deletion.
+- Optimize for application quality and trustworthy outcomes rather than raw submission volume.
+- Do not sell candidate data or accept paid employer ranking.
