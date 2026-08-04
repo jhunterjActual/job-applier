@@ -4,6 +4,8 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 
 ## P0 - Reliability, safety, and document integrity
 
+- [ ] Retire automatic browser-based application filling and submission attempts, including headed-mode controls and automation-specific retry states; replace them with a dependable guided-manual flow that opens the verified posting, presents the prepared materials and application checklist, and records progress only when the user confirms it.
+- [ ] Make every manual-application artifact explicit and downloadable: persist the generated cover letter as a safely named `.txt` file alongside the resume PDF, regenerate it after edits, and expose clearly labeled Resume PDF and Cover Letter TXT downloads from both Search & Match and Application Logs.
 - [x] Prevent cover-letter upload files from overwriting tailored resume PDFs.
 - [x] Distinguish `form_filled`, unverified `submitted`, and destination-confirmed `applied` states.
 - [x] Record lifecycle timestamps and submission evidence without treating tailoring as an application date.
@@ -37,6 +39,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 ## P2 - Broader job-seeker value
 
 - [x] Replace the inherited GCD site icon with Job Applier branding, including appropriate favicon, pinned-tab, application-manifest, and mobile home-screen assets.
+- [ ] Show a privacy-safe "Maps API key saved" state and replacement guidance in Profile & Resume, matching the existing Gemini-key experience without revealing either stored key.
 - [ ] Add an AI-provider abstraction with securely stored bring-your-own keys, model selection, capability validation, and clear provider-specific errors; support providers beyond Gemini without exposing secrets to the browser.
 - [ ] Add a geocoding/maps-provider abstraction with provider selection, securely stored credentials, validation, rate-limit handling, and support for alternatives to Google Maps.
 - [x] Polish the cleanup-preview modal action bar: prevent Restore counts and labels from wrapping awkwardly, use consistent button sizing and icon alignment, establish a clearer primary/secondary/destructive hierarchy, and stack actions cleanly at narrow widths.
@@ -63,6 +66,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 ## Product principles
 
 - A clicked submit button is not proof that an application was accepted.
+- Prefer a transparent guided-manual application workflow over brittle browser automation that job sites actively resist.
 - Automation must not invent credentials, experience, sensitive answers, or consent.
 - Preserve user history by default; archive before permanent deletion.
 - Optimize for application quality and trustworthy outcomes rather than raw submission volume.
