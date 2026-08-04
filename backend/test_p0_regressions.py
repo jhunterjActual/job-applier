@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from applier import (
     _confirmation_markers,
@@ -24,8 +25,10 @@ from searcher import (
 from tailor import (
     RESUME_MODE_GUIDANCE,
     RESUME_SECTION_TEMPLATES,
+    TailoringResponse,
     apply_resume_section_template,
     finalize_cover_letter,
+    tailor_resume_and_cover_letter,
 )
 from utils import markdown_to_html
 
@@ -95,6 +98,37 @@ class ApplicationSafetyTests(unittest.TestCase):
 
 
 class ResumeRenderingTests(unittest.TestCase):
+    def test_tailoring_uses_validated_structured_response(self) -> None:
+        class FakeResponse:
+            text = '{"tailored_resume": "unterminated'
+            parsed = {
+                "tailored_resume": "# Candidate\n\n## Professional Summary\n\nEvidence-based summary.",
+                "cover_letter": "August 4, 2026\n\nDear Hiring Team,\n\nI am interested in this role.",
+            }
+
+        class FakeModels:
+            config = None
+
+            def generate_content(self, **kwargs):
+                self.config = kwargs["config"]
+                return FakeResponse()
+
+        class FakeClient:
+            models = FakeModels()
+
+        client = FakeClient()
+        with patch("tailor.get_client", return_value=client):
+            result = tailor_resume_and_cover_letter(
+                "# Candidate\n\n## Experience\n\nEvidence.",
+                "Director",
+                "Example Company",
+                "Lead an evidence-based program.",
+            )
+
+        self.assertTrue(result["success"])
+        self.assertIn("## Professional Summary", result["tailored_resume"])
+        self.assertIs(client.models.config.response_schema, TailoringResponse)
+
     def test_markdown_is_escaped_and_supported_tokens_are_rendered(self) -> None:
         rendered = markdown_to_html(
             "# Candidate\n\n---\n\n## Experience\n\n### Role\n\n"

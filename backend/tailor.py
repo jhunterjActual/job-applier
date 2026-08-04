@@ -3,7 +3,42 @@ import re
 from datetime import date
 from google import genai
 from google.genai import types
+from pydantic import BaseModel, Field
 from config import get_gemini_api_key
+
+
+class TailoringResponse(BaseModel):
+    tailored_resume: str = Field(description="Complete tailored resume in Markdown.")
+    cover_letter: str = Field(description="Complete cover letter in plain text.")
+
+
+class JobMatchResponse(BaseModel):
+    match_score: int = Field(ge=0, le=100)
+    match_analysis: str
+
+
+class BatchJobMatch(BaseModel):
+    index: int = Field(ge=0)
+    match_score: int = Field(ge=0, le=100)
+    match_analysis: str
+
+
+class BatchMatchResponse(BaseModel):
+    matches: list[BatchJobMatch]
+
+
+def _structured_response_data(response, schema: type[BaseModel]) -> dict:
+    """Prefer SDK-validated structured output over reparsing model text."""
+    parsed = getattr(response, "parsed", None)
+    if isinstance(parsed, schema):
+        return parsed.model_dump()
+    if parsed is not None:
+        return schema.model_validate(parsed).model_dump()
+
+    response_text = (getattr(response, "text", None) or "").strip()
+    if not response_text:
+        raise ValueError("Gemini returned an empty structured response.")
+    return schema.model_validate_json(response_text).model_dump()
 
 
 def format_cover_letter_date(value: date) -> str:
@@ -177,11 +212,7 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
     Candidate's Base Resume:
     \"\"\"{base_resume_text}\"\"\"
     
-    Output a JSON object with exactly two keys:
-    - "tailored_resume": The complete markdown-formatted tailored resume.
-    - "cover_letter": The complete plain-text cover letter.
-    
-    Return ONLY valid JSON.
+    Return the complete tailored resume and cover letter using the supplied response schema.
     """
 
     try:
@@ -191,10 +222,11 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                response_schema=TailoringResponse,
             )
         )
         
-        res_data = json.loads(response.text.strip(), strict=False)
+        res_data = _structured_response_data(response, TailoringResponse)
         tailored_resume = res_data.get("tailored_resume", "").strip()
         cover_letter = finalize_cover_letter(res_data.get("cover_letter", ""), letter_date)
 
@@ -258,8 +290,7 @@ def analyze_job_match(base_resume_text: str, job_title: str, company_name: str, 
        - Gaps (missing key skills or experiences)
        - Recommendations (how to position themselves)
        
-    Output a JSON object with keys: "match_score" (integer) and "match_analysis" (string markdown).
-    Return ONLY valid JSON.
+    Return the score and analysis using the supplied response schema.
     """
     
     try:
@@ -268,9 +299,10 @@ def analyze_job_match(base_resume_text: str, job_title: str, company_name: str, 
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                response_schema=JobMatchResponse,
             ),
         )
-        data = json.loads(response.text.strip())
+        data = _structured_response_data(response, JobMatchResponse)
         return {
             "success": True,
             "match_score": data.get("match_score", 50),
@@ -323,18 +355,7 @@ def analyze_job_matches_batch(base_resume_text: str, jobs_list: list, api_key: s
     1. A match score between 0 and 100 based on how well the candidate's skills and experience align with the job description.
     2. A concise analysis (1-2 sentences) summarizing why the candidate fits, or what key gaps exist.
     
-    Output a JSON object with a single key "matches" containing a list of objects in the exact same order:
-    {{
-      "matches": [
-        {{
-          "index": 0,
-          "match_score": 85,
-          "match_analysis": "Excellent fit for backend skills. Missing Kubernetes experience."
-        }},
-        ...
-      ]
-    }}
-    Return ONLY valid JSON.
+    Return one result for every posting, in the same order, using the supplied response schema.
     """
     
     try:
@@ -344,9 +365,10 @@ def analyze_job_matches_batch(base_resume_text: str, jobs_list: list, api_key: s
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                response_schema=BatchMatchResponse,
             ),
         )
-        data = json.loads(response.text.strip())
+        data = _structured_response_data(response, BatchMatchResponse)
         return {
             "success": True,
             "matches": data.get("matches", [])
