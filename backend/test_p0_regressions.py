@@ -166,7 +166,31 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260803.8", source)
+                self.assertIn("20260804.1", source)
+
+    def test_job_applier_brand_assets_and_manifest_are_wired(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+        manifest_source = (static_dir / "site.webmanifest").read_text(encoding="utf-8")
+        for asset in (
+            "icons/favicon.ico", "icons/favicon.svg", "icons/apple-touch-icon.png",
+            "icons/safari-pinned-tab.svg", "icons/icon-192.png", "icons/icon-512.png",
+        ):
+            with self.subTest(asset=asset):
+                self.assertTrue((static_dir / asset).is_file())
+        self.assertIn('rel="manifest" href="/static/site.webmanifest"', html_source)
+        self.assertIn('src="/static/icons/favicon.svg"', html_source)
+        self.assertIn('"name": "Job Applier Agent"', manifest_source)
+
+    def test_cleanup_footer_has_scoped_responsive_actions(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+        css_source = (static_dir / "index.css").read_text(encoding="utf-8")
+        self.assertIn('class="modal-footer cleanup-footer"', html_source)
+        self.assertIn('class="cleanup-count-badge"', html_source)
+        self.assertIn('btn btn-primary cleanup-action-btn" id="archive-untouched-btn"', html_source)
+        self.assertIn(".cleanup-footer .modal-actions", css_source)
+        self.assertIn("@media (max-width: 620px)", css_source)
 
     def test_cleanup_actions_have_click_through_guard(self) -> None:
         script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")

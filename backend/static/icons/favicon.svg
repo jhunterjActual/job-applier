@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Job Applier</title>
+  <defs>
+    <linearGradient id="brand-gradient" x1="8" y1="6" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="#111c33"/>
+  <rect x="4" y="4" width="56" height="56" rx="12" fill="url(#brand-gradient)"/>
+  <path d="M18 12h20l10 10v30H18z" fill="#f8fafc"/>
+  <path d="M38 12v10h10" fill="#c4b5fd"/>
+  <path d="m24 35 6 6 12-14" fill="none" stroke="#2563eb" stroke-linecap="round" stroke-linejoin="round" stroke-width="5"/>
+</svg>

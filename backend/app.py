@@ -16,7 +16,7 @@ from utils import generate_resume_pdf, generate_cover_letter_pdf, find_us_headqu
 from lifecycle import PIPELINE_STATUSES, status_from_automation, undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
 
-APP_BUILD = "20260803.8"
+APP_BUILD = "20260804.1"
 
 app = FastAPI(title="AI Job Applier Agent API")
 

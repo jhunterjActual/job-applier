@@ -36,7 +36,10 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 
 ## P2 - Broader job-seeker value
 
-- [ ] Polish the cleanup-preview modal action bar: prevent Restore counts and labels from wrapping awkwardly, use consistent button sizing and icon alignment, establish a clearer primary/secondary/destructive hierarchy, and stack actions cleanly at narrow widths.
+- [x] Replace the inherited GCD site icon with Job Applier branding, including appropriate favicon, pinned-tab, application-manifest, and mobile home-screen assets.
+- [ ] Add an AI-provider abstraction with securely stored bring-your-own keys, model selection, capability validation, and clear provider-specific errors; support providers beyond Gemini without exposing secrets to the browser.
+- [ ] Add a geocoding/maps-provider abstraction with provider selection, securely stored credentials, validation, rate-limit handling, and support for alternatives to Google Maps.
+- [x] Polish the cleanup-preview modal action bar: prevent Restore counts and labels from wrapping awkwardly, use consistent button sizing and icon alignment, establish a clearer primary/secondary/destructive hierarchy, and stack actions cleanly at narrow widths.
 - [ ] Support multiple base resumes and version history.
 - [ ] Import DOCX/PDF resumes with OCR fallback and export an accessible DOCX alternative.
 - [ ] Add compensation, contract-rate, shift, travel, commute, sponsorship, clearance, license, and work-condition filters.
@@ -49,6 +52,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 
 ## P3 - Integrations, growth, and monetization enablement
 
+- [ ] Support secure multi-user operation before public web hosting: authentication and account recovery, strict per-user data and file isolation, authorization checks, server-side encrypted secret storage, privacy controls, export/deletion, abuse protection, and deployment-safe database migrations.
 - [ ] Add email and calendar integrations for interviews and follow-ups.
 - [ ] Add a browser extension or bookmarklet for saving jobs and assisting applications.
 - [ ] Add team administration, billing, usage metering, and institutional reporting.

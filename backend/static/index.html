@@ -3,7 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Job Applier Agent</title>
+    <meta name="theme-color" content="#52a6ff">
+    <meta name="application-name" content="Job Applier Agent">
+    <meta name="description" content="A privacy-first assistant for discovering jobs and preparing application materials.">
+    <title>Job Applier Agent</title>
+    <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
+    <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" sizes="180x180">
+    <link rel="mask-icon" href="/static/icons/safari-pinned-tab.svg" color="#52a6ff">
+    <link rel="manifest" href="/static/site.webmanifest">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,14 +19,14 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260803-8">
+    <link rel="stylesheet" href="/static/index.css?v=20260804-1">
 </head>
 <body>
     <div class="app-container">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
             <div class="logo-area">
-                <div class="logo-icon"><i class="fa-solid fa-robot"></i></div>
+                <div class="logo-icon"><img src="/static/icons/favicon.svg" alt=""></div>
                 <div class="logo-text">JobApplier<span>Agent</span></div>
             </div>
             
@@ -368,7 +376,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2>Preview Untouched Job Cleanup</h2>
-                <button class="close-modal-btn" id="close-cleanup-modal"><i class="fa-solid fa-xmark"></i></button>
+                <button type="button" class="close-modal-btn" id="close-cleanup-modal" aria-label="Close cleanup preview"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="modal-body">
                 <p class="text-muted margin-bottom-md" id="cleanup-definition">
@@ -396,17 +404,21 @@
                     Archive is reversible. Permanent delete removes the previewed untouched records and cannot be undone.
                 </p>
             </div>
-            <div class="modal-footer justify-between">
-                <button class="btn btn-secondary" id="restore-archived-btn">
-                    <i class="fa-solid fa-rotate-left"></i> Restore Archived (<span id="cleanup-restore-count">0</span>)
+            <div class="modal-footer cleanup-footer">
+                <button type="button" class="btn btn-secondary cleanup-action-btn cleanup-restore-btn" id="restore-archived-btn">
+                    <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
+                    <span>Restore archived</span>
+                    <span class="cleanup-count-badge" id="cleanup-restore-count">0</span>
                 </button>
                 <div class="modal-actions">
-                    <button class="btn btn-secondary" id="close-cleanup-modal-btn">Cancel</button>
-                    <button class="btn btn-secondary" id="archive-untouched-btn">
-                        <i class="fa-solid fa-box-archive"></i> Archive Untouched
+                    <button type="button" class="btn btn-secondary cleanup-action-btn" id="close-cleanup-modal-btn">Cancel</button>
+                    <button type="button" class="btn btn-primary cleanup-action-btn" id="archive-untouched-btn">
+                        <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
+                        <span>Archive untouched</span>
                     </button>
-                    <button class="btn btn-danger" id="delete-untouched-btn">
-                        <i class="fa-solid fa-trash"></i> Delete Permanently
+                    <button type="button" class="btn btn-danger cleanup-action-btn" id="delete-untouched-btn">
+                        <i class="fa-solid fa-trash" aria-hidden="true"></i>
+                        <span>Delete permanently</span>
                     </button>
                 </div>
             </div>
@@ -545,6 +557,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260803-8"></script>
+    <script src="/static/app.js?v=20260804-1"></script>
 </body>
 </html>
