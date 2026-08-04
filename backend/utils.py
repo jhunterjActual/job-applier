@@ -1,8 +1,18 @@
 import os
 import re
-from playwright.sync_api import sync_playwright
-from google import genai
+import html
+from pathlib import Path
 from config import get_gemini_api_key, get_google_maps_api_key
+
+
+def _inline_markdown(text: str) -> str:
+    """Render the small, safe inline Markdown subset used in resumes."""
+    rendered = html.escape(text.strip(), quote=True)
+    rendered = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', rendered)
+    rendered = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'<em>\1</em>', rendered)
+    rendered = re.sub(r'(?<!_)_([^_]+?)_(?!_)', r'<em>\1</em>', rendered)
+    return rendered
+
 
 def markdown_to_html(md_text: str) -> str:
     """
@@ -15,58 +25,86 @@ def markdown_to_html(md_text: str) -> str:
     Returns:
         str: The generated HTML body string.
     """
-    html = md_text
-    
-    # Escape some basic HTML characters if present
-    # (Optional, but let's keep it simple for resume text)
-    
-    # Headers
-    html = re.sub(r'^#\s+(.+)$', r'<h1>\1</h1>', html, flags=re.MULTILINE)
-    html = re.sub(r'^##\s+(.+)$', r'<h2>\1</h2>', html, flags=re.MULTILINE)
-    html = re.sub(r'^###\s+(.+)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
-    
-    # Bold
-    html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', html)
-    
-    # Bullet points (lists)
-    # Wrap multiple list items in <ul>...</ul>
-    lines = html.split('\n')
+    source = (md_text or "").replace("\u2011", "-").replace("\u2013", "-").replace("\u2014", "-")
+    output: list[str] = []
+    paragraph: list[str] = []
     in_list = False
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith('- ') or stripped.startswith('* '):
-            content = stripped[2:]
-            if not in_list:
-                new_lines.append('<ul>')
-                in_list = True
-            new_lines.append(f'<li>{content}</li>')
-        else:
-            if in_list:
-                new_lines.append('</ul>')
-                in_list = False
-            new_lines.append(line)
-    if in_list:
-        new_lines.append('</ul>')
-    html = '\n'.join(new_lines)
-    
-    # Paragraphs (blocks separated by double newlines, excluding tags)
-    paragraphs = html.split('\n\n')
-    new_paragraphs = []
-    for p in paragraphs:
-        p_strip = p.strip()
-        if not p_strip:
-            continue
-        if p_strip.startswith('<h') or p_strip.startswith('<ul') or p_strip.startswith('<li') or p_strip.startswith('</ul'):
-            new_paragraphs.append(p_strip)
-        else:
-            # Replace single newlines within paragraph with <br/>
-            p_formatted = p_strip.replace('\n', '<br/>')
-            new_paragraphs.append(f'<p>{p_formatted}</p>')
-            
-    return '\n'.join(new_paragraphs)
+    in_section = False
+    in_entry = False
 
-def generate_pdf_from_html(html_content: str, output_pdf_path: str, is_resume: bool = True) -> None:
+    def flush_paragraph() -> None:
+        if paragraph:
+            output.append(f"<p>{' '.join(_inline_markdown(line) for line in paragraph)}</p>")
+            paragraph.clear()
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            output.append("</ul>")
+            in_list = False
+
+    def close_entry() -> None:
+        nonlocal in_entry
+        if in_entry:
+            output.append("</div>")
+            in_entry = False
+
+    for raw_line in source.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            flush_paragraph()
+            close_list()
+            continue
+
+        heading = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        if heading:
+            flush_paragraph()
+            close_list()
+            level = len(heading.group(1))
+            if level == 2:
+                close_entry()
+                if in_section:
+                    output.append("</section>")
+                output.append('<section class="resume-section">')
+                in_section = True
+            elif level == 3:
+                close_entry()
+                output.append('<div class="resume-entry">')
+                in_entry = True
+            output.append(f"<h{level}>{_inline_markdown(heading.group(2))}</h{level}>")
+            continue
+
+        if re.fullmatch(r"[-*_]{3,}", stripped):
+            flush_paragraph()
+            close_list()
+            output.append("<hr>")
+            continue
+
+        bullet = re.match(r"^[-*]\s+(.+)$", stripped)
+        if bullet:
+            flush_paragraph()
+            if not in_list:
+                output.append("<ul>")
+                in_list = True
+            output.append(f"<li>{_inline_markdown(bullet.group(1))}</li>")
+            continue
+
+        close_list()
+        paragraph.append(stripped)
+
+    flush_paragraph()
+    close_list()
+    close_entry()
+    if in_section:
+        output.append("</section>")
+    return "\n".join(output)
+
+def generate_pdf_from_html(
+    html_content: str,
+    output_pdf_path: str,
+    is_resume: bool = True,
+    max_pages: int = 2,
+) -> dict:
     """
     Compiles an HTML body string with custom styles and prints it to a PDF
     on disk using Playwright's headless PDF printing capabilities.
@@ -79,63 +117,73 @@ def generate_pdf_from_html(html_content: str, output_pdf_path: str, is_resume: b
     # CSS template
     style = """
     <style>
+        @page {
+            size: Letter;
+            margin: 0.58in 0.65in;
+        }
         body {
             font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
             color: #333333;
-            line-height: 1.5;
+            line-height: 1.3;
             margin: 0;
-            padding: 40px;
-            font-size: 14px;
+            padding: 0;
+            font-size: 10.5pt;
         }
         h1 {
-            font-size: 26px;
+            font-size: 20pt;
             color: #1a365d;
             margin-top: 0;
-            margin-bottom: 5px;
+            margin-bottom: 6pt;
             border-bottom: 2px solid #2b6cb0;
-            padding-bottom: 8px;
+            padding-bottom: 5pt;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 0.6pt;
         }
         h2 {
-            font-size: 18px;
+            font-size: 13.5pt;
             color: #2b6cb0;
-            margin-top: 20px;
-            margin-bottom: 10px;
+            margin-top: 12pt;
+            margin-bottom: 6pt;
             border-bottom: 1px solid #e2e8f0;
-            padding-bottom: 3px;
+            padding-bottom: 2pt;
+            break-after: avoid;
         }
         h3 {
-            font-size: 15px;
+            font-size: 11pt;
             color: #4a5568;
-            margin-top: 12px;
-            margin-bottom: 6px;
+            margin-top: 8pt;
+            margin-bottom: 3pt;
+            break-after: avoid;
         }
         p {
             margin-top: 0;
-            margin-bottom: 10px;
+            margin-bottom: 5pt;
+            orphans: 2;
+            widows: 2;
         }
         ul {
             margin-top: 0;
-            margin-bottom: 12px;
-            padding-left: 20px;
+            margin-bottom: 6pt;
+            padding-left: 16pt;
         }
         li {
-            margin-bottom: 5px;
+            margin-bottom: 3pt;
+            break-inside: avoid;
+            orphans: 2;
+            widows: 2;
         }
         strong {
             color: #2d3748;
         }
-        .contact-info {
-            text-align: center;
-            margin-bottom: 20px;
-            font-size: 13px;
-            color: #718096;
-        }
-        .contact-info a {
-            color: #2b6cb0;
-            text-decoration: none;
-        }
+        hr { display: none; }
+        .resume-section { break-inside: auto; }
+        .resume-entry { break-inside: avoid; }
+        body.compact { font-size: 10pt; line-height: 1.22; }
+        body.compact h1 { font-size: 18pt; margin-bottom: 4pt; padding-bottom: 3pt; }
+        body.compact h2 { font-size: 12.5pt; margin-top: 8pt; margin-bottom: 4pt; }
+        body.compact h3 { font-size: 10.5pt; margin-top: 5pt; margin-bottom: 2pt; }
+        body.compact p, body.compact li { margin-bottom: 2pt; }
+        body.compact ul { margin-bottom: 3pt; }
     </style>
     """
     
@@ -146,25 +194,37 @@ def generate_pdf_from_html(html_content: str, output_pdf_path: str, is_resume: b
         <meta charset="utf-8">
         {style}
     </head>
-    <body>
+    <body class="{'resume' if is_resume else 'cover-letter'}">
         {html_content}
     </body>
     </html>
     """
     
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.set_content(full_html)
-        # Set margin options for PDF
-        page.pdf(
-            path=output_pdf_path,
-            format="Letter",
-            margin={"top": "0.6in", "bottom": "0.6in", "left": "0.6in", "right": "0.6in"}
-        )
-        browser.close()
+        page = browser.new_page(viewport={"width": 701, "height": 945})
+        page.set_content(full_html, wait_until="load")
+        try:
+            for compact in (False, True):
+                if compact:
+                    page.evaluate("document.body.classList.add('compact')")
+                pdf_bytes = page.pdf(format="Letter", print_background=True, prefer_css_page_size=True)
+                page_count = len(re.findall(rb"/Type\s*/Page\b", pdf_bytes))
+                if page_count <= max_pages:
+                    output_path = Path(output_pdf_path)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_bytes(pdf_bytes)
+                    return {"page_count": page_count, "compact": compact}
+            raise ValueError(
+                f"Generated document exceeds the {max_pages}-page limit after compact formatting. "
+                "Shorten the source content and regenerate it."
+            )
+        finally:
+            browser.close()
 
-def generate_resume_pdf(markdown_text: str, output_pdf_path: str) -> None:
+def generate_resume_pdf(markdown_text: str, output_pdf_path: str, max_pages: int = 2) -> dict:
     """
     Converts a Markdown tailored resume to HTML and compiles it to a PDF.
     
@@ -175,9 +235,9 @@ def generate_resume_pdf(markdown_text: str, output_pdf_path: str) -> None:
     html_body = markdown_to_html(markdown_text)
     
     # We can perform some custom structural cleanup if needed, but a clean markdown conversion is usually enough
-    generate_pdf_from_html(html_body, output_pdf_path, is_resume=True)
+    return generate_pdf_from_html(html_body, output_pdf_path, is_resume=True, max_pages=max_pages)
 
-def generate_cover_letter_pdf(cover_letter_text: str, output_pdf_path: str) -> None:
+def generate_cover_letter_pdf(cover_letter_text: str, output_pdf_path: str) -> dict:
     """
     Converts a plain text cover letter into a styled HTML and prints to PDF.
     
@@ -186,10 +246,10 @@ def generate_cover_letter_pdf(cover_letter_text: str, output_pdf_path: str) -> N
         output_pdf_path (str): The path to save the generated PDF.
     """
     # Convert newlines to paragraphs/breaks
-    formatted_body = cover_letter_text.replace('\n', '<br/>')
+    formatted_body = html.escape(cover_letter_text).replace('\n', '<br/>')
     html_body = f"<div class='cover-letter'>{formatted_body}</div>"
     
-    generate_pdf_from_html(html_body, output_pdf_path, is_resume=False)
+    return generate_pdf_from_html(html_body, output_pdf_path, is_resume=False, max_pages=1)
 
 def find_us_headquarters(company_name: str, api_key: str = None, google_maps_key: str = None) -> str:
     """
@@ -233,6 +293,7 @@ def find_us_headquarters(company_name: str, api_key: str = None, google_maps_key
         return "Unknown"
         
     try:
+        from google import genai
         client = genai.Client(api_key=key)
         prompt = f"""
         What is the full U.S. headquarters street address (including street number, street name, city, state, and zip code) for the company: '{company_name}'?

@@ -195,6 +195,7 @@ a:hover {
 
 .status-indicator.red { background-color: var(--color-red); box-shadow: 0 0 8px var(--color-red); }
 .status-indicator.green { background-color: var(--color-green); box-shadow: 0 0 8px var(--color-green); }
+.status-indicator.yellow { background-color: var(--color-yellow); box-shadow: 0 0 8px var(--color-yellow); }
 
 .status-text {
     font-size: 13px;
@@ -289,12 +290,21 @@ a:hover {
 .card-header {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
     margin-bottom: 24px;
 }
 
 .card-header h2 {
     font-size: 20px;
     font-weight: 700;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
 }
 
 .justify-between {
@@ -501,6 +511,53 @@ select:focus {
     background-color: hsla(222, 47%, 2%, 0.6);
 }
 
+.date-entry-control {
+    position: relative;
+    display: flex;
+}
+
+.date-entry-control > input[type="text"] {
+    color: var(--text-primary);
+    caret-color: var(--color-primary);
+    padding-right: 48px;
+}
+
+.date-entry-control > input[type="text"]::selection {
+    color: var(--bg-app);
+    background: var(--color-primary);
+}
+
+.date-picker-btn {
+    position: absolute;
+    right: 1px;
+    top: 1px;
+    bottom: 1px;
+    width: 42px;
+    border: 0;
+    border-left: 1px solid var(--border-color);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    color: var(--text-primary);
+    background: var(--color-secondary);
+    cursor: pointer;
+    pointer-events: none;
+}
+
+.date-picker-btn:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+
+.date-picker-native {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 42px;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
 .password-input-container {
     position: relative;
     display: flex;
@@ -613,6 +670,60 @@ select:focus {
     gap: 20px;
 }
 
+.saved-search-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+.saved-search-picker {
+    min-width: min(360px, 100%);
+}
+
+.save-search-options {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.save-search-options input[type="text"] {
+    max-width: 320px;
+}
+
+.result-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+    padding: 0 24px 16px;
+}
+
+.result-filters label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.result-filters select {
+    width: auto;
+    min-width: 130px;
+    padding: 8px 10px;
+}
+
+.provider-alerts {
+    margin-bottom: 24px;
+    padding: 14px 16px;
+    border: 1px solid rgba(234, 179, 8, 0.45);
+    border-radius: var(--radius-md);
+    background: rgba(234, 179, 8, 0.08);
+    color: var(--text-secondary);
+}
+
+.provider-alerts strong {
+    color: var(--color-yellow);
+}
+
 /* Data Table Component */
 .no-padding {
     padding: 0;
@@ -648,6 +759,18 @@ select:focus {
 
 .data-table tbody tr:hover {
     background-color: hsla(0, 0%, 100%, 0.015);
+}
+
+.job-details-cell span {
+    display: block;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    text-transform: capitalize;
+    margin-bottom: 3px;
+}
+
+.job-details-cell span:first-child {
+    color: var(--text-secondary);
 }
 
 .actions-col {
@@ -772,6 +895,42 @@ select:focus {
 .modal-actions {
     display: flex;
     gap: 12px;
+}
+
+.cleanup-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+}
+
+.cleanup-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: hsla(0, 0%, 100%, 0.02);
+}
+
+.cleanup-stat strong {
+    color: var(--color-primary);
+    font-size: 24px;
+}
+
+.cleanup-stat span,
+.cleanup-sample-list {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.cleanup-sample-list {
+    margin: 10px 0 0 20px;
+}
+
+.cleanup-sample-list li {
+    margin-bottom: 6px;
 }
 
 .modal-tabs {

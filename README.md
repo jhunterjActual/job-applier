@@ -1,5 +1,7 @@
 # AI Job Search & Application Agent
 
+See [PRODUCT_BACKLOG.md](PRODUCT_BACKLOG.md) for the consolidated implementation and product roadmap.
+
 An automated, self-contained AI-powered agent designed to streamline the job discovery, resume tailoring, and application submission process. 
 
 The application features a **FastAPI backend** that doubles as a static file server to deliver a **custom, premium dark-mode dashboard** built with clean, native web technologies (no NPM or React build pipeline required).
@@ -57,18 +59,22 @@ The application features a **FastAPI backend** that doubles as a static file ser
 ### Quick Start (Windows)
 We have provided automated startup scripts in the root directory:
 
-#### Option A: Using Windows PowerShell (Recommended)
+#### Option A: Using Windows Command Prompt (Recommended)
+* Double-click `run.bat` or run it from CMD:
+  ```cmd
+  run.bat
+  ```
+
+#### Option B: Using Windows PowerShell
 1. Open PowerShell and navigate to the project directory.
 2. Execute the start script:
    ```powershell
    .\run.ps1
    ```
-
-#### Option B: Using Windows Command Prompt
-* Double-click `run.bat` or run it from CMD:
-  ```cmd
-  run.bat
-  ```
+   If your organization blocks local PowerShell scripts, use `run.bat`. A process-only alternative that does not change the system execution policy is:
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1
+   ```
 
 The startup scripts will automatically set up a Python virtual environment, install requirements, download the browser binaries, start the FastAPI server, and open the dashboard in your default browser at:
 👉 **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
@@ -117,3 +123,29 @@ If you prefer setting up manually or are on macOS/Linux:
    - Review your tailored resume and cover letter.
 4. **Apply**:
    - Click **Apply Now**. Check the **Watch Application in Browser** box to watch the Playwright browser navigate and fill in your details in real-time.
+
+### Preview and clean up untouched jobs
+
+1. Open **Search & Match** and click **Clean Up** beside **Refresh**.
+2. Review the exact counts for jobs eligible to archive, permanently delete, or restore.
+3. Choose **Archive Untouched** for a reversible cleanup. Tailored jobs and every job with application history are protected.
+4. Use **Restore Archived** to return archived jobs to the active list, or **Delete Permanently** only after reviewing both confirmation prompts.
+
+The server validates that the candidate set has not changed since the preview. If a search adds or changes jobs, refresh the cleanup preview before continuing.
+
+### P1 workflow controls
+
+- Use **Mark Applied** on a matched or tailored job to record a manually completed application with its date, method, notes, and follow-up date.
+- Use **Update Status** to record interviews, offers, rejections, withdrawals, or closed roles. **Undo Last Change** restores the previous recorded state.
+- Save frequently used keyword/location combinations above the search form. Use the score, status, and sort controls to focus the active list.
+- Saved searches can optionally provide daily or weekly local reminders while the app is running; rerunning the saved search advances its next reminder.
+- Use the circular-arrow action on a job row to recheck whether the employer posting remains available.
+- Provider health diagnostics detect likely ATS URL or page-format changes and show a local warning instead of silently hiding a failing source.
+- Choose a resume mode under **Profile & Resume** before tailoring. Generated resume and cover-letter text can be edited in **View Materials**; **Save Edits** regenerates the PDF.
+- Each resume mode uses a deterministic section template before PDF generation. Manual application dates accept direct `MM/DD/YYYY` or `YYYY-MM-DD` entry and also provide a calendar picker.
+
+The app is designed for local access at `127.0.0.1`. Cross-origin browser access is intentionally disabled, and profile reads return only API-key configuration flags—not stored key values.
+
+### Startup troubleshooting
+
+The Windows launchers validate the project virtual environment before opening the dashboard and repair it when a usable Python installation is available. Use `run.bat` when Windows execution policy blocks `.ps1` files. If the dashboard was already open during an unsuccessful launch, close that tab and launch again. The browser opens only after the expected backend build responds, and local UI assets are served without stale caching. If port 8000 is already occupied by an older copy, stop that terminal with Ctrl+C before relaunching.

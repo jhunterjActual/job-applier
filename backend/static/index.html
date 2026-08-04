@@ -11,7 +11,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css">
+    <link rel="stylesheet" href="/static/index.css?v=20260803-8">
 </head>
 <body>
     <div class="app-container">
@@ -43,8 +43,8 @@
 
             <div class="api-key-badge-container">
                 <div class="api-key-badge" id="api-status">
-                    <span class="status-indicator red"></span>
-                    <span class="status-text">Gemini API Key Missing</span>
+                    <span class="status-indicator yellow"></span>
+                    <span class="status-text">Checking Gemini API Key...</span>
                 </div>
             </div>
         </aside>
@@ -149,6 +149,21 @@
                                     <input type="url" id="p-website" placeholder="https://johndoe.com">
                                 </div>
                                 <div class="form-group full-width">
+                                    <label for="p-resume-mode">Resume mode</label>
+                                    <select id="p-resume-mode">
+                                        <option value="general_professional">General professional</option>
+                                        <option value="it">IT / Technical</option>
+                                        <option value="technical_executive">Technical executive</option>
+                                        <option value="federal">Federal</option>
+                                        <option value="healthcare">Healthcare</option>
+                                        <option value="education">Education</option>
+                                        <option value="sales">Sales</option>
+                                        <option value="trades_operations">Trades / Operations</option>
+                                        <option value="academic_cv">Academic CV</option>
+                                        <option value="cover_letter">Cover-letter emphasis</option>
+                                    </select>
+                                </div>
+                                <div class="form-group full-width">
                                     <label for="p-apikey">Gemini API Key</label>
                                     <div class="password-input-container">
                                         <input type="password" id="p-apikey" placeholder="Enter API Key (AI-xxxx...)">
@@ -201,6 +216,17 @@
                 <!-- Search Inputs Card -->
                 <div class="card margin-bottom-md">
                     <div class="card-body">
+                        <div class="saved-search-controls margin-bottom-md">
+                            <div class="form-group saved-search-picker">
+                                <label for="saved-search-select">Saved searches</label>
+                                <select id="saved-search-select">
+                                    <option value="">Select a saved search</option>
+                                </select>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="delete-saved-search-btn" disabled>
+                                <i class="fa-solid fa-trash"></i> Remove
+                            </button>
+                        </div>
                         <form id="search-form" class="search-bar-grid">
                             <div class="form-group">
                                 <label for="s-keywords">Job Title / Keywords</label>
@@ -215,17 +241,61 @@
                                     <i class="fa-solid fa-paper-plane"></i> Search & Analyze
                                 </button>
                             </div>
+                            <div class="save-search-options">
+                                <label><input type="checkbox" id="save-search-checkbox"> Save this search</label>
+                                <input type="text" id="saved-search-name" maxlength="80" placeholder="Optional saved-search name">
+                                <label for="saved-search-frequency">Reminder</label>
+                                <select id="saved-search-frequency">
+                                    <option value="none">No reminder</option>
+                                    <option value="daily">Daily</option>
+                                    <option value="weekly">Weekly</option>
+                                </select>
+                            </div>
                         </form>
                     </div>
                 </div>
+
+                <div class="provider-alerts" id="saved-search-alerts" hidden></div>
+                <div class="provider-alerts" id="provider-alerts" hidden></div>
 
                 <!-- Job Match Results Table -->
                 <div class="card">
                     <div class="card-header justify-between">
                         <h2>Discovered Job Postings</h2>
-                        <button class="btn btn-secondary btn-sm" id="refresh-jobs-btn">
-                            <i class="fa-solid fa-rotate"></i> Refresh
-                        </button>
+                        <div class="header-actions">
+                            <button class="btn btn-secondary btn-sm" id="cleanup-jobs-btn">
+                                <i class="fa-solid fa-broom"></i> Clean Up
+                            </button>
+                            <button class="btn btn-secondary btn-sm" id="refresh-jobs-btn">
+                                <i class="fa-solid fa-rotate"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+                    <div class="result-filters">
+                        <label>Minimum score
+                            <select id="job-min-score">
+                                <option value="40">40%+</option>
+                                <option value="50">50%+</option>
+                                <option value="70">70%+</option>
+                                <option value="80">80%+</option>
+                            </select>
+                        </label>
+                        <label>Status
+                            <select id="job-status-filter">
+                                <option value="">All active statuses</option>
+                                <option value="matched">Matched</option>
+                                <option value="tailored">Tailored</option>
+                                <option value="applied">Applied and beyond</option>
+                            </select>
+                        </label>
+                        <label>Sort by
+                            <select id="job-sort-order">
+                                <option value="score_desc">Best match</option>
+                                <option value="newest">Newest found</option>
+                                <option value="company">Company</option>
+                            </select>
+                        </label>
+                        <span class="text-muted" id="job-result-count"></span>
                     </div>
                     <div class="card-body no-padding">
                         <div class="table-responsive">
@@ -234,6 +304,7 @@
                                     <tr>
                                         <th>Company</th>
                                         <th>Position</th>
+                                        <th>Details</th>
                                         <th>Match Score</th>
                                         <th>Link</th>
                                         <th>Status</th>
@@ -242,7 +313,7 @@
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td colspan="6" class="table-empty-state">
+                                        <td colspan="7" class="table-empty-state">
                                             <i class="fa-solid fa-briefcase"></i>
                                             <p>No job postings found yet. Run a search to match jobs with your resume.</p>
                                         </td>
@@ -292,6 +363,56 @@
         </main>
     </div>
 
+    <!-- Untouched Jobs Cleanup Preview -->
+    <div class="modal" id="cleanup-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Preview Untouched Job Cleanup</h2>
+                <button class="close-modal-btn" id="close-cleanup-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted margin-bottom-md" id="cleanup-definition">
+                    Only matched jobs with no application record or generated materials are eligible.
+                </p>
+                <div class="cleanup-summary-grid">
+                    <div class="cleanup-stat">
+                        <strong id="cleanup-archive-count">0</strong>
+                        <span>Ready to archive</span>
+                    </div>
+                    <div class="cleanup-stat">
+                        <strong id="cleanup-delete-count">0</strong>
+                        <span>Ready to delete</span>
+                    </div>
+                    <div class="cleanup-stat">
+                        <strong id="cleanup-protected-count">0</strong>
+                        <span>Protected</span>
+                    </div>
+                </div>
+                <div id="cleanup-sample-container" class="margin-top-sm">
+                    <h3>Preview sample</h3>
+                    <ul id="cleanup-sample-list" class="cleanup-sample-list"></ul>
+                </div>
+                <p class="form-help margin-top-sm">
+                    Archive is reversible. Permanent delete removes the previewed untouched records and cannot be undone.
+                </p>
+            </div>
+            <div class="modal-footer justify-between">
+                <button class="btn btn-secondary" id="restore-archived-btn">
+                    <i class="fa-solid fa-rotate-left"></i> Restore Archived (<span id="cleanup-restore-count">0</span>)
+                </button>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="close-cleanup-modal-btn">Cancel</button>
+                    <button class="btn btn-secondary" id="archive-untouched-btn">
+                        <i class="fa-solid fa-box-archive"></i> Archive Untouched
+                    </button>
+                    <button class="btn btn-danger" id="delete-untouched-btn">
+                        <i class="fa-solid fa-trash"></i> Delete Permanently
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Modals -->
     <!-- Tailoring Modal -->
     <div class="modal" id="tailor-modal">
@@ -308,12 +429,12 @@
                 
                 <div class="modal-tab-content active" id="modal-tab-tailored-resume">
                     <div class="material-container">
-                        <textarea id="tailored-resume-display" class="materials-textarea" readonly></textarea>
+                        <textarea id="tailored-resume-display" class="materials-textarea"></textarea>
                     </div>
                 </div>
                 <div class="modal-tab-content" id="modal-tab-cover-letter">
                     <div class="material-container">
-                        <textarea id="cover-letter-display" class="materials-textarea" readonly></textarea>
+                        <textarea id="cover-letter-display" class="materials-textarea"></textarea>
                     </div>
                 </div>
             </div>
@@ -327,11 +448,88 @@
                 </div>
                 <div class="modal-actions">
                     <button class="btn btn-secondary" id="close-tailor-modal-btn">Cancel</button>
+                    <button class="btn btn-secondary" id="save-materials-btn">
+                        <i class="fa-solid fa-floppy-disk"></i> Save Edits
+                    </button>
                     <button class="btn btn-primary" id="apply-job-confirm-btn">
                         <i class="fa-solid fa-rocket"></i> Submit Application Now
                     </button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Manual application and pipeline editor -->
+    <div class="modal" id="lifecycle-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="lifecycle-modal-title">Update Application Status</h2>
+                <button class="close-modal-btn" id="close-lifecycle-modal" aria-label="Close status editor"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="lifecycle-form">
+                <div class="modal-body">
+                    <p class="text-muted margin-bottom-md" id="lifecycle-job-label"></p>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="lifecycle-status">Status</label>
+                            <select id="lifecycle-status" required>
+                                <option value="matched">Matched</option>
+                                <option value="tailored">Tailored</option>
+                                <option value="form_filled">Form Filled</option>
+                                <option value="submitted">Submitted — Unverified</option>
+                                <option value="applied">Applied</option>
+                                <option value="interview">Interview</option>
+                                <option value="offer">Offer</option>
+                                <option value="rejected">Rejected</option>
+                                <option value="withdrawn">Withdrawn</option>
+                                <option value="closed">Closed</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="lifecycle-applied-on">Application date</label>
+                            <div class="date-entry-control">
+                                <input type="text" id="lifecycle-applied-on" inputmode="numeric" autocomplete="off" placeholder="MM/DD/YYYY">
+                                <button type="button" class="date-picker-btn" id="lifecycle-applied-calendar-btn" aria-label="Choose application date from calendar"><i class="fa-solid fa-calendar-days"></i></button>
+                                <input type="date" class="date-picker-native" id="lifecycle-applied-calendar" tabindex="-1" aria-hidden="true">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="lifecycle-method">Application method</label>
+                            <select id="lifecycle-method">
+                                <option value="company_site">Company website</option>
+                                <option value="job_board">Job board</option>
+                                <option value="email">Email</option>
+                                <option value="recruiter">Recruiter</option>
+                                <option value="referral">Referral</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="lifecycle-follow-up">Follow-up date</label>
+                            <div class="date-entry-control">
+                                <input type="text" id="lifecycle-follow-up" inputmode="numeric" autocomplete="off" placeholder="MM/DD/YYYY">
+                                <button type="button" class="date-picker-btn" id="lifecycle-follow-up-calendar-btn" aria-label="Choose follow-up date from calendar"><i class="fa-solid fa-calendar-days"></i></button>
+                                <input type="date" class="date-picker-native" id="lifecycle-follow-up-calendar" tabindex="-1" aria-hidden="true">
+                            </div>
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="lifecycle-notes">Notes</label>
+                            <textarea id="lifecycle-notes" rows="4" maxlength="4000" placeholder="Contact, next step, interview details, or other context"></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer justify-between">
+                    <button type="button" class="btn btn-secondary" id="undo-lifecycle-btn">
+                        <i class="fa-solid fa-rotate-left"></i> Undo Last Change
+                    </button>
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" id="cancel-lifecycle-btn">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="save-lifecycle-btn">
+                            <i class="fa-solid fa-floppy-disk"></i> Save Status
+                        </button>
+                    </div>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -347,6 +545,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260803-8"></script>
 </body>
 </html>
