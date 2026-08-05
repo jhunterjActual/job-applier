@@ -92,6 +92,7 @@ def init_db() -> None:
         date_applied TEXT,
         us_hq TEXT,
         tailored_resume_path TEXT,
+        cover_letter_path TEXT,
         tailored_resume_text TEXT,
         cover_letter TEXT,
         status TEXT DEFAULT 'tailored',
@@ -149,6 +150,7 @@ def init_db() -> None:
     _add_column_if_missing(cursor, "applications", "notes", "TEXT")
     _add_column_if_missing(cursor, "applications", "follow_up_date", "TEXT")
     _add_column_if_missing(cursor, "applications", "tailored_resume_text", "TEXT")
+    _add_column_if_missing(cursor, "applications", "cover_letter_path", "TEXT")
     _add_column_if_missing(cursor, "saved_searches", "schedule_frequency", "TEXT DEFAULT 'none'")
     _add_column_if_missing(cursor, "saved_searches", "next_alert_at", "TEXT")
 

@@ -2,7 +2,7 @@
 
 See [PRODUCT_BACKLOG.md](PRODUCT_BACKLOG.md) for the consolidated implementation and product roadmap.
 
-An automated, self-contained AI-powered agent designed to streamline the job discovery, resume tailoring, and application submission process. 
+A self-contained AI-powered assistant designed to streamline job discovery, resume tailoring, and a reliable guided-manual application process.
 
 The application features a **FastAPI backend** that doubles as a static file server to deliver a **custom, premium dark-mode dashboard** built with clean, native web technologies (no NPM or React build pipeline required).
 
@@ -14,7 +14,7 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Crawls major job boards: **Greenhouse**, **Lever**, **Ashby**, and **SmartRecruiters** using optimized Yahoo Search queries.
    - Runs domain-specific search queries separately to bypass search engine ranking caps, boosting relevant matches by over 300%.
    - Generalized to support Greenhouse's modern `job-boards.greenhouse.io` migration.
-   - Employs user-agent spoofing to bypass bot detectors (resolving issues like SmartRecruiters' fallback blocks).
+   - Uses a modern browser compatibility profile while rejecting job-board fallback and browser-error pages.
 
 2. **Cost-Efficient AI Matching**:
    - Matches candidate resumes against crawled listings and computes match scores (0-100%) with key pros/cons.
@@ -31,13 +31,13 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Optionally integrates with the **Google Places API** to resolve company locations and conserve Gemini API calls.
    - Automatically falls back to the Gemini API if the Google Maps key is missing or invalid.
 
-5. **Automated Application Filler (Playwright Browser Agent)**:
-   - Navigates to application pages, extracts form fields (inputs, selects, textareas, file uploads), and maps candidate profile data to inputs using Gemini.
-   - **Auto-Navigation**: Automatically detects if the target URL is a description page rather than a form. It will click "Apply Now" buttons or append `/apply` (Lever) to navigate to the form.
-   - **Headed/Headless Modes**: Runs silently in the background or in Headed mode so you can watch the agent fill fields and upload PDFs in real-time.
+5. **Guided Manual Applications**:
+   - Reviews and saves tailored materials before application work begins.
+   - Provides explicit, recruiter-friendly Resume PDF and Cover Letter TXT downloads.
+   - Opens the verified employer posting in a new tab; you complete the employer's form and then confirm the lifecycle state with **Mark Applied**.
 
 6. **Local Security**:
-   - Stored completely on your local machine. All profile details, resumes, generated PDFs, and private API keys are kept in a local SQLite database (`data/jobapplier.db`).
+   - Stored completely on your local machine. Profile details and private API keys stay in local SQLite (`data/jobapplier.db`), while generated PDF and TXT artifacts remain in the ignored local output directory.
 
 ---
 
@@ -122,7 +122,8 @@ If you prefer setting up manually or are on macOS/Linux:
    - Under **Discovered Job Postings**, click **Tailor Materials** next to a matched job.
    - Review your tailored resume and cover letter.
 4. **Apply**:
-   - Click **Apply Now**. Check the **Watch Application in Browser** box to watch the Playwright browser navigate and fill in your details in real-time.
+   - Click **Apply Manually**, review and save edits, and download the **Resume PDF** and **Cover Letter TXT**.
+   - Click **Open Application Site**, complete the employer's form yourself, and return to use **Mark Applied** with the correct date and method.
 
 ### Preview and clean up untouched jobs
 
@@ -141,7 +142,7 @@ The server validates that the candidate set has not changed since the preview. I
 - Saved searches can optionally provide daily or weekly local reminders while the app is running; rerunning the saved search advances its next reminder.
 - Use the circular-arrow action on a job row to recheck whether the employer posting remains available.
 - Provider health diagnostics detect likely ATS URL or page-format changes and show a local warning instead of silently hiding a failing source.
-- Choose a resume mode under **Profile & Resume** before tailoring. Generated resume and cover-letter text can be edited in **View Materials**; **Save Edits** regenerates the PDF.
+- Choose a resume mode under **Profile & Resume** before tailoring. Generated resume and cover-letter text can be edited in **View Materials**; **Save Edits** regenerates both downloadable artifacts.
 - Each resume mode uses a deterministic section template before PDF generation. Manual application dates accept direct `MM/DD/YYYY` or `YYYY-MM-DD` entry and also provide a calendar picker.
 
 The app is designed for local access at `127.0.0.1`. Cross-origin browser access is intentionally disabled, and profile reads return only API-key configuration flags—not stored key values.
@@ -150,7 +151,7 @@ The app is designed for local access at `127.0.0.1`. Cross-origin browser access
 
 PostHog analytics is disabled unless `POSTHOG_PROJECT_TOKEN` is present in the process environment. `POSTHOG_HOST` is optional and defaults to the US ingestion endpoint; use the ingestion host for your PostHog region. The variable names are also listed in `backend/.env.example`, but JobApplier does not automatically read `.env` files or include any real token in the repository.
 
-When enabled, JobApplier creates a random installation UUID in the local ignored `data/` directory. It never uses the profile database ID and does not identify a person. Only `job_search_started`, `resume_tailored`, `application_filled`, and `job_lifecycle_updated` are sent, with allowlisted low-cardinality status, source-category, lifecycle-transition, duration-bucket, and application-version properties. Names, contact details, résumé or application text, employer and job details, URLs, search terms, filenames, paths, API keys, and database content are never included.
+When enabled, JobApplier creates a random installation UUID in the local ignored `data/` directory. It never uses the profile database ID and does not identify a person. Only `job_search_started`, `resume_tailored`, `manual_application_opened`, `material_downloaded`, and `job_lifecycle_updated` are sent, with allowlisted low-cardinality status, source-category, material-type, lifecycle-transition, duration-bucket, and application-version properties. Names, contact details, résumé or application text, employer and job details, URLs, search terms, filenames, paths, API keys, and database content are never included.
 
 Analytics capture is isolated from request handling and uses short network timeouts. Failures are silently dropped. GeoIP enrichment, session replay, automatic exception capture, and local-variable capture are disabled. To opt out, remove `POSTHOG_PROJECT_TOKEN` and restart JobApplier; the local installation UUID may be deleted separately if you do not plan to re-enable analytics.
 

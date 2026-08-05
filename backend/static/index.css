@@ -899,6 +899,35 @@ select:focus {
 .modal-actions {
     display: flex;
     gap: 12px;
+    margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.manual-application-guide {
+    margin-bottom: 20px;
+    padding: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: rgba(var(--color-primary-rgb), 0.06);
+}
+
+.manual-application-guide ol {
+    margin: 10px 0 16px;
+    padding-left: 22px;
+    color: var(--text-secondary);
+}
+
+.material-downloads {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.file-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .cleanup-footer {
@@ -1050,73 +1079,6 @@ select:focus {
 .text-center { text-align: center; }
 .text-muted { color: var(--text-muted); }
 
-/* Switch Toggle UI */
-.applying-mode-options {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.toggle-switch {
-    position: relative;
-    display: inline-block;
-    width: 48px;
-    height: 24px;
-}
-
-.toggle-switch input { 
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
-.slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: var(--color-secondary);
-    border: 1px solid var(--border-color);
-    transition: .3s;
-}
-
-.slider:before {
-    position: absolute;
-    content: "";
-    height: 16px;
-    width: 16px;
-    left: 3px;
-    bottom: 3px;
-    background-color: var(--text-primary);
-    transition: .3s;
-}
-
-input:checked + .slider {
-    background-color: var(--color-primary);
-    border-color: var(--color-primary);
-}
-
-input:checked + .slider:before {
-    transform: translateX(24px);
-    background-color: var(--bg-app);
-}
-
-.slider.round {
-    border-radius: 34px;
-}
-
-.slider.round:before {
-    border-radius: 50%;
-}
-
-.toggle-label {
-    font-size: 13.5px;
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-
 /* Scrollbar Styles */
 ::-webkit-scrollbar {
     width: 8px;
@@ -1158,6 +1120,13 @@ input:checked + .slider:before {
 }
 
 @media (max-width: 620px) {
+    #tailor-modal .modal-actions,
+    .material-downloads {
+        display: grid;
+        grid-template-columns: 1fr;
+        width: 100%;
+    }
+
     #cleanup-modal .modal-header,
     #cleanup-modal .modal-body,
     #cleanup-modal .modal-footer {

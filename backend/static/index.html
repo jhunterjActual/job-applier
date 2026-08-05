@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260804-1">
+    <link rel="stylesheet" href="/static/index.css?v=20260805-1">
 </head>
 <body>
     <div class="app-container">
@@ -63,7 +63,7 @@
             <header class="top-header">
                 <div class="header-title">
                     <h1 id="page-title">Dashboard Overview</h1>
-                    <p id="page-subtitle">Track your automated job application progress.</p>
+                    <p id="page-subtitle">Track tailored materials and confirmed application progress.</p>
                 </div>
                 <div class="user-greeting">
                     <span id="user-display-name">Candidate</span>
@@ -94,7 +94,7 @@
                         <div class="stat-icon green"><i class="fa-solid fa-paper-plane"></i></div>
                         <div class="stat-details">
                             <h3 id="stat-applied">0</h3>
-                            <p>Applications Filed</p>
+                            <p>Applications Confirmed</p>
                         </div>
                         <div class="stat-progress-bar green" style="width: 100%;"></div>
                     </div>
@@ -112,7 +112,7 @@
                                     <div class="timeline-icon"><i class="fa-solid fa-info-circle"></i></div>
                                     <div class="timeline-content">
                                         <p class="timeline-title">Agent Initialized</p>
-                                        <p class="timeline-desc">Ready to search and apply. Fill in your profile details to start.</p>
+                                        <p class="timeline-desc">Ready to search, tailor materials, and track applications. Fill in your profile details to start.</p>
                                         <span class="timeline-time">Just now</span>
                                     </div>
                                 </div>
@@ -337,7 +337,7 @@
             <section class="tab-pane" id="tab-logs">
                 <div class="card">
                     <div class="card-header justify-between">
-                        <h2>Application Submission History</h2>
+                        <h2>Application Materials &amp; History</h2>
                         <button class="btn btn-secondary btn-sm" id="refresh-logs-btn">
                             <i class="fa-solid fa-rotate"></i> Refresh History
                         </button>
@@ -359,7 +359,7 @@
                                     <tr>
                                         <td colspan="6" class="table-empty-state">
                                             <i class="fa-solid fa-paper-plane"></i>
-                                            <p>No jobs submitted yet. Tailor and apply from the "Search & Match" tab.</p>
+                                            <p>No application materials yet. Tailor a job from the "Search &amp; Match" tab.</p>
                                         </td>
                                     </tr>
                                 </tbody>
@@ -434,6 +434,22 @@
                 <button class="close-modal-btn" id="close-tailor-modal"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="modal-body">
+                <div class="manual-application-guide">
+                    <strong>Apply on the employer's site</strong>
+                    <ol>
+                        <li>Review and save any edits below.</li>
+                        <li>Download the resume PDF and cover-letter TXT.</li>
+                        <li>Open the employer's application, complete it yourself, then use Mark Applied.</li>
+                    </ol>
+                    <div class="material-downloads">
+                        <a class="btn btn-secondary" id="download-resume-btn" download>
+                            <i class="fa-solid fa-file-pdf"></i> Download Resume PDF
+                        </a>
+                        <a class="btn btn-secondary" id="download-cover-letter-btn" download>
+                            <i class="fa-solid fa-file-lines"></i> Download Cover Letter TXT
+                        </a>
+                    </div>
+                </div>
                 <div class="modal-tabs">
                     <button class="modal-tab-btn active" data-modal-tab="tailored-resume">Tailored Resume</button>
                     <button class="modal-tab-btn" data-modal-tab="cover-letter">Cover Letter</button>
@@ -450,22 +466,15 @@
                     </div>
                 </div>
             </div>
-            <div class="modal-footer justify-between">
-                <div class="applying-mode-options">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="applying-headed-checkbox" checked>
-                        <span class="slider round"></span>
-                    </label>
-                    <span class="toggle-label">Watch Application in Browser (Headed Mode)</span>
-                </div>
+            <div class="modal-footer">
                 <div class="modal-actions">
                     <button class="btn btn-secondary" id="close-tailor-modal-btn">Cancel</button>
                     <button class="btn btn-secondary" id="save-materials-btn">
                         <i class="fa-solid fa-floppy-disk"></i> Save Edits
                     </button>
-                    <button class="btn btn-primary" id="apply-job-confirm-btn">
-                        <i class="fa-solid fa-rocket"></i> Submit Application Now
-                    </button>
+                    <a class="btn btn-primary" id="open-manual-application-btn" target="_blank" rel="noopener noreferrer">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> Open Application Site
+                    </a>
                 </div>
             </div>
         </div>
@@ -552,11 +561,11 @@
                 <div class="dual-ring-spinner"></div>
             </div>
             <h3 id="loading-title">Processing Request...</h3>
-            <p id="loading-subtitle" class="text-muted">Please wait while the AI handles the paperwork.</p>
+            <p id="loading-subtitle" class="text-muted">Please wait while JobApplier prepares your request.</p>
         </div>
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260804-1"></script>
+    <script src="/static/app.js?v=20260805-1"></script>
 </body>
 </html>

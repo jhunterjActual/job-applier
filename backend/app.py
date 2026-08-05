@@ -1,10 +1,10 @@
 import os
-import json
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Literal, Optional
 from datetime import date, datetime, timedelta
@@ -13,10 +13,10 @@ import config
 from database import get_db_connection
 from tailor import apply_resume_section_template, finalize_cover_letter, tailor_resume_and_cover_letter
 from searcher import run_job_search_and_matching, scrape_job_details
-from applier import fill_application_form
-from utils import generate_resume_pdf, generate_cover_letter_pdf, find_us_headquarters
-from lifecycle import PIPELINE_STATUSES, status_from_automation, undo_latest_lifecycle_change, update_lifecycle
+from utils import generate_resume_pdf, find_us_headquarters
+from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
+from materials import material_download_name, persist_cover_letter, resolve_output_file
 from analytics import (
     capture_event,
     duration_bucket,
@@ -25,7 +25,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260804.1"
+APP_BUILD = "20260805.1"
 
 
 @asynccontextmanager
@@ -233,7 +233,9 @@ def get_jobs(include_archived: bool = False) -> list[dict]:
     conn = get_db_connection()
     where_clause = "" if include_archived else "WHERE j.status != 'archived'"
     rows = conn.execute(f"""
-        SELECT j.*, a.date_applied, a.application_method, a.notes, a.follow_up_date
+        SELECT j.*, a.date_applied, a.application_method, a.notes, a.follow_up_date,
+               CASE WHEN a.tailored_resume_path IS NOT NULL OR a.cover_letter IS NOT NULL
+                    THEN 1 ELSE 0 END AS has_materials
         FROM jobs j
         LEFT JOIN applications a ON a.job_id = j.id
         {where_clause}
@@ -573,8 +575,9 @@ def tailor_resume_endpoint(job_id: int) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     
-    # Save cover letter as text
+    # Persist both artifacts before exposing this job as ready for manual application.
     cover_letter_text = res["cover_letter"]
+    cover_letter_path = persist_cover_letter(job_id, cover_letter_text)
     
     # Update application log or store inside job metadata
     # (For convenience we will store tailored details in the applications table with a tailored/pending status)
@@ -589,18 +592,18 @@ def tailor_resume_endpoint(job_id: int) -> dict:
     if existing:
         conn.execute("""
         UPDATE applications
-        SET company = ?, position = ?, us_hq = ?, tailored_resume_path = ?, tailored_resume_text = ?, cover_letter = ?,
+        SET company = ?, position = ?, us_hq = ?, tailored_resume_path = ?, cover_letter_path = ?, tailored_resume_text = ?, cover_letter = ?,
             created_at = COALESCE(created_at, ?), tailored_at = ?,
             status = CASE WHEN status IN ('applied', 'interview', 'offer') THEN status ELSE 'tailored' END
         WHERE job_id = ?
-        """, (job["company"], job["title"], hq, resume_pdf_path, res["tailored_resume"], cover_letter_text, now, now, job_id))
+        """, (job["company"], job["title"], hq, resume_pdf_path, cover_letter_path, res["tailored_resume"], cover_letter_text, now, now, job_id))
     else:
         conn.execute("""
         INSERT INTO applications (
             job_id, company, position, date_applied, us_hq, tailored_resume_path,
-            tailored_resume_text, cover_letter, status, created_at, tailored_at
-        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'tailored', ?, ?)
-        """, (job_id, job["company"], job["title"], hq, resume_pdf_path, res["tailored_resume"], cover_letter_text, now, now))
+            cover_letter_path, tailored_resume_text, cover_letter, status, created_at, tailored_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 'tailored', ?, ?)
+        """, (job_id, job["company"], job["title"], hq, resume_pdf_path, cover_letter_path, res["tailored_resume"], cover_letter_text, now, now))
         
     # Update job status to tailored
     conn.execute("""
@@ -624,6 +627,9 @@ def tailor_resume_endpoint(job_id: int) -> dict:
         "tailored_resume": res["tailored_resume"],
         "cover_letter": cover_letter_text,
         "us_hq": hq,
+        "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
+        "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",
+        "manual_application_url": f"/api/jobs/{job_id}/apply-manually",
         "pdf_page_count": pdf_result["page_count"],
         "pdf_compact": pdf_result["compact"],
     }
@@ -643,14 +649,31 @@ def get_tailored_details(job_id: int) -> dict:
     app_row = conn.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)).fetchone()
     conn.close()
     if app_row:
+        cover_letter_path = app_row["cover_letter_path"]
+        try:
+            resolve_output_file(cover_letter_path, ".txt")
+        except (ValueError, FileNotFoundError):
+            if app_row["cover_letter"]:
+                cover_letter_path = persist_cover_letter(job_id, app_row["cover_letter"])
+                conn = get_db_connection()
+                conn.execute(
+                    "UPDATE applications SET cover_letter_path = ? WHERE job_id = ?",
+                    (cover_letter_path, job_id),
+                )
+                conn.commit()
+                conn.close()
         # Load tailored resume markdown text (we can rebuild it or return letter + path)
         return {
             "success": True,
             "cover_letter": app_row["cover_letter"],
             "tailored_resume": app_row["tailored_resume_text"] or "",
             "tailored_resume_path": app_row["tailored_resume_path"],
+            "cover_letter_path": cover_letter_path,
             "us_hq": app_row["us_hq"],
-            "status": app_row["status"]
+            "status": app_row["status"],
+            "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
+            "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",
+            "manual_application_url": f"/api/jobs/{job_id}/apply-manually",
         }
     return {"success": False, "message": "No tailored details found for this job."}
 
@@ -685,107 +708,129 @@ def update_tailored_details(job_id: int, req: MaterialsUpdateRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    cover_letter_path = persist_cover_letter(job_id, cover_letter)
     conn = get_db_connection()
     conn.execute("""
         UPDATE applications
-        SET tailored_resume_text = ?, tailored_resume_path = ?, cover_letter = ?
+        SET tailored_resume_text = ?, tailored_resume_path = ?, cover_letter_path = ?, cover_letter = ?
         WHERE job_id = ?
-    """, (resume_text, output_path, cover_letter, job_id))
+    """, (resume_text, output_path, cover_letter_path, cover_letter, job_id))
     conn.commit()
     conn.close()
-    return {"success": True, "pdf_page_count": pdf_result["page_count"], "pdf_compact": pdf_result["compact"]}
-
-# Auto-apply endpoint
-@app.post("/api/jobs/{job_id}/apply")
-def apply_job(job_id: int, headed: bool = True) -> dict:
-    """
-    Trigger the automated application filler using Playwright browser automation.
-    
-    Args:
-        job_id (int): The ID of the job listing to apply to.
-        headed (bool, optional): Whether to run the browser in headed mode so the user can watch. Defaults to True.
-        
-    Returns:
-        dict: Success status and feedback message.
-    """
-    started_at = time.monotonic()
-    conn = get_db_connection()
-    job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-    app_row = conn.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)).fetchone()
-    profile = conn.execute("SELECT * FROM profile LIMIT 1").fetchone()
-    conn.close()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found.")
-    if not app_row or not app_row["tailored_resume_path"]:
-        raise HTTPException(status_code=400, detail="Resume has not been tailored for this job yet.")
-        
-    # Assemble candidate profile details
-    candidate_profile = {
-        "name": profile["name"],
-        "email": profile["email"],
-        "phone": profile["phone"],
-        "github": profile["github"],
-        "linkedin": profile["linkedin"],
-        "website": profile["website"]
-    }
-    
-    # Run browser application filling
-    api_key = profile["gemini_api_key"]
-    res = fill_application_form(
-        url=job["url"],
-        candidate_profile=candidate_profile,
-        tailored_resume_path=app_row["tailored_resume_path"],
-        cover_letter_text=app_row["cover_letter"],
-        api_key=api_key,
-        headed=headed
-    )
-    
-    if not res.get("success"):
-        raise HTTPException(status_code=500, detail=res.get("error", "Application form filling failed."))
-        
-    # Record what the automation actually proved. Clicking a submit button is
-    # only a submission attempt; it is not confirmation that the site accepted it.
-    lifecycle_status = status_from_automation(res)
-    now = datetime.now().isoformat(timespec="seconds")
-    date_applied = datetime.now().strftime("%Y-%m-%d") if lifecycle_status == "applied" else None
-    evidence = res.get("submission_evidence", "")
-    review_fields = res.get("fields_needing_review", [])
-    if review_fields:
-        evidence = json.dumps({"confirmation": evidence, "review_fields": review_fields})
-
-    conn = get_db_connection()
-    conn.execute("""
-    UPDATE applications
-    SET date_applied = ?, status = ?, form_filled_at = ?,
-        submitted_at = CASE WHEN ? IN ('submitted', 'applied') THEN ? ELSE submitted_at END,
-        confirmed_at = CASE WHEN ? = 'applied' THEN ? ELSE confirmed_at END,
-        application_method = 'automated', submission_evidence = ?
-    WHERE job_id = ?
-    """, (date_applied, lifecycle_status, now, lifecycle_status, now, lifecycle_status, now, evidence, job_id))
-    
-    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (lifecycle_status, job_id))
-    conn.commit()
-    conn.close()
-    capture_event(
-        "application_filled",
-        {
-            "result": "success",
-            "source_category": source_category(job["source"]),
-            "from_status": app_row["status"] if app_row["status"] in PIPELINE_STATUSES else "matched",
-            "to_status": lifecycle_status,
-            "duration_bucket": duration_bucket(time.monotonic() - started_at),
-        },
-    )
-    
     return {
         "success": True,
-        "message": res.get("msg", "Application submitted!"),
-        "auto_submitted": res.get("auto_submitted", False),
-        "status": lifecycle_status,
-        "submission_confirmed": res.get("submission_confirmed", False),
-        "fields_needing_review": review_fields,
+        "pdf_page_count": pdf_result["page_count"],
+        "pdf_compact": pdf_result["compact"],
+        "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
+        "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",
     }
+
+def _application_materials(job_id: int):
+    """Load a job and its generated materials for a guided manual application."""
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT a.*, j.company AS job_company, j.title AS job_title,
+               j.url AS job_url, j.source AS job_source, j.status AS job_status
+        FROM applications a
+        JOIN jobs j ON j.id = a.job_id
+        WHERE a.job_id = ?
+        """,
+        (job_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Generated application materials were not found.")
+    return row
+
+
+@app.get("/api/jobs/{job_id}/materials/resume")
+def download_tailored_resume(job_id: int) -> FileResponse:
+    """Download the generated resume using a readable, filesystem-safe name."""
+    material = _application_materials(job_id)
+    try:
+        path = resolve_output_file(material["tailored_resume_path"], ".pdf")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="The generated resume PDF is unavailable.") from exc
+    capture_event(
+        "material_downloaded",
+        {
+            "result": "success",
+            "source_category": source_category(material["job_source"]),
+            "material_type": "resume",
+        },
+    )
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=material_download_name(
+            material["job_company"], material["job_title"], "resume", ".pdf"
+        ),
+    )
+
+
+@app.get("/api/jobs/{job_id}/materials/cover-letter")
+def download_cover_letter(job_id: int) -> FileResponse:
+    """Download the generated cover letter as a plain-text attachment."""
+    material = _application_materials(job_id)
+    cover_letter_path = material["cover_letter_path"]
+    try:
+        path = resolve_output_file(cover_letter_path, ".txt")
+    except (ValueError, FileNotFoundError):
+        if not material["cover_letter"]:
+            raise HTTPException(status_code=404, detail="The generated cover letter is unavailable.")
+        cover_letter_path = persist_cover_letter(job_id, material["cover_letter"])
+        conn = get_db_connection()
+        conn.execute(
+            "UPDATE applications SET cover_letter_path = ? WHERE job_id = ?",
+            (cover_letter_path, job_id),
+        )
+        conn.commit()
+        conn.close()
+        path = resolve_output_file(cover_letter_path, ".txt")
+    capture_event(
+        "material_downloaded",
+        {
+            "result": "success",
+            "source_category": source_category(material["job_source"]),
+            "material_type": "cover_letter",
+        },
+    )
+    return FileResponse(
+        path,
+        media_type="text/plain; charset=utf-8",
+        filename=material_download_name(
+            material["job_company"], material["job_title"], "cover-letter", ".txt"
+        ),
+    )
+
+
+@app.get("/api/jobs/{job_id}/apply-manually")
+def open_manual_application(job_id: int) -> RedirectResponse:
+    """Open a verified employer URL after confirming required materials exist."""
+    material = _application_materials(job_id)
+    try:
+        resolve_output_file(material["tailored_resume_path"], ".pdf")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail="Downloadable application materials are not ready.") from exc
+    if not material["cover_letter"]:
+        raise HTTPException(status_code=400, detail="Downloadable application materials are not ready.")
+
+    parsed_url = urlsplit(material["job_url"] or "")
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+        raise HTTPException(status_code=400, detail="The employer application URL is invalid.")
+    from_status = material["status"] or material["job_status"] or "matched"
+    if from_status not in {"matched", "tailored", "form_filled", "submitted", "applied", "interview", "offer", "rejected", "withdrawn", "closed"}:
+        from_status = "matched"
+    capture_event(
+        "manual_application_opened",
+        {
+            "result": "success",
+            "source_category": source_category(material["job_source"]),
+            "from_status": from_status,
+        },
+    )
+    return RedirectResponse(material["job_url"], status_code=302)
 
 # Applications logs endpoint
 @app.get("/api/applications")
@@ -805,11 +850,6 @@ def get_applications() -> list[dict]:
     """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
-
-# Mount output folder to serve tailored resume PDFs
-if not os.path.exists(config.OUTPUT_DIR):
-    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
-app.mount("/output", StaticFiles(directory=str(config.OUTPUT_DIR)), name="output")
 
 # Mount frontend static folder
 static_dir = os.path.join(os.path.dirname(__file__), "static")

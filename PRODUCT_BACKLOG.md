@@ -4,8 +4,8 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 
 ## P0 - Reliability, safety, and document integrity
 
-- [ ] Retire automatic browser-based application filling and submission attempts, including headed-mode controls and automation-specific retry states; replace them with a dependable guided-manual flow that opens the verified posting, presents the prepared materials and application checklist, and records progress only when the user confirms it.
-- [ ] Make every manual-application artifact explicit and downloadable: persist the generated cover letter as a safely named `.txt` file alongside the resume PDF, regenerate it after edits, and expose clearly labeled Resume PDF and Cover Letter TXT downloads from both Search & Match and Application Logs.
+- [x] Retire automatic browser-based application filling and submission attempts, including headed-mode controls and automation-specific retry states; replace them with a dependable guided-manual flow that opens the verified posting, presents the prepared materials and application checklist, and records progress only when the user confirms it.
+- [x] Make every manual-application artifact explicit and downloadable: persist the generated cover letter as a safely named `.txt` file alongside the resume PDF, regenerate it after edits, and expose clearly labeled Resume PDF and Cover Letter TXT downloads from both Search & Match and Application Logs.
 - [x] Prevent cover-letter upload files from overwriting tailored resume PDFs.
 - [x] Distinguish `form_filled`, unverified `submitted`, and destination-confirmed `applied` states.
 - [x] Record lifecycle timestamps and submission evidence without treating tailoring as an application date.

@@ -63,8 +63,8 @@ Start-ThreadJob {
         Start-Sleep -Seconds 1
         try {
             $version = Invoke-RestMethod "http://127.0.0.1:8000/api/version" -TimeoutSec 1
-            if ($version.build -eq "20260804.1") {
-                Start-Process "http://127.0.0.1:8000/?build=20260804.1"
+            if ($version.build -eq "20260805.1") {
+                Start-Process "http://127.0.0.1:8000/?build=20260805.1"
                 return
             }
         } catch { }

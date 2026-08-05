@@ -59,6 +59,8 @@ def valid_properties(event: str) -> dict:
         properties["to_status"] = "tailored"
     if "duration_bucket" in EVENT_SCHEMAS[event]:
         properties["duration_bucket"] = "under_1s"
+    if "material_type" in EVENT_SCHEMAS[event]:
+        properties["material_type"] = "resume"
     return properties
 
 
@@ -67,7 +69,7 @@ class AnalyticsPrivacyTests(unittest.TestCase):
         return AnalyticsService(
             token=token,
             host="https://posthog.invalid",
-            application_version="20260804.1",
+            application_version="20260805.1",
             identity_path=Path(directory) / "installation-id",
             client_factory=factory,
         )
@@ -81,7 +83,7 @@ class AnalyticsPrivacyTests(unittest.TestCase):
             self.assertEqual([], factory.calls)
             self.assertFalse(identity_path.exists())
 
-    def test_all_four_events_use_the_persisted_random_identity(self) -> None:
+    def test_all_events_use_the_persisted_random_identity(self) -> None:
         with TemporaryDirectory() as directory:
             factory = ClientFactory()
             service = self.make_service(directory, factory)
@@ -90,7 +92,7 @@ class AnalyticsPrivacyTests(unittest.TestCase):
                 self.assertTrue(service.capture(event, valid_properties(event)))
             self.assertTrue(service.shutdown(1.0))
 
-            self.assertEqual(4, len(factory.client.captures))
+            self.assertEqual(len(EVENT_SCHEMAS), len(factory.client.captures))
             self.assertEqual({persisted}, {call[1]["distinct_id"] for call in factory.client.captures})
             self.assertEqual(persisted, service.installation_id)
 
@@ -147,7 +149,7 @@ class AnalyticsPrivacyTests(unittest.TestCase):
                 "distinct_id": service.installation_id,
                 "properties": {
                     **valid_properties("job_search_started"),
-                    "application_version": "20260804.1",
+                    "application_version": "20260805.1",
                     "$current_url": "https://private.example/jobs/secret",
                     "$ip": "192.0.2.1",
                     "$lib": "posthog-python",
