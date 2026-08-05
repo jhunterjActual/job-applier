@@ -1,5 +1,7 @@
 import os
 import json
+import time
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -15,10 +17,28 @@ from applier import fill_application_form
 from utils import generate_resume_pdf, generate_cover_letter_pdf, find_us_headquarters
 from lifecycle import PIPELINE_STATUSES, status_from_automation, undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
+from analytics import (
+    capture_event,
+    duration_bucket,
+    initialize_analytics,
+    shutdown_analytics,
+    source_category,
+)
 
 APP_BUILD = "20260804.1"
 
-app = FastAPI(title="AI Job Applier Agent API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start optional analytics and stop it within a bounded shutdown budget."""
+    initialize_analytics(APP_BUILD)
+    try:
+        yield
+    finally:
+        shutdown_analytics(timeout_seconds=0.5)
+
+
+app = FastAPI(title="AI Job Applier Agent API", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -240,6 +260,15 @@ def change_job_lifecycle(job_id: int, req: LifecycleUpdateRequest) -> dict:
             source="manual",
         )
         conn.commit()
+        capture_event(
+            "job_lifecycle_updated",
+            {
+                "result": "success",
+                "source_category": "manual",
+                "from_status": result["previous_status"],
+                "to_status": result["status"],
+            },
+        )
         return {"success": True, **result}
     except LookupError as exc:
         conn.rollback()
@@ -484,6 +513,13 @@ def search_jobs(req: SearchRequest, background_tasks: BackgroundTasks) -> dict:
         conn.close()
     IS_SEARCHING = True
     background_tasks.add_task(run_search_wrapper, req.keywords, req.location)
+    capture_event(
+        "job_search_started",
+        {
+            "result": "success",
+            "source_category": "saved_search" if (req.save_search or req.saved_search_id) else "manual",
+        },
+    )
     return {"success": True, "message": "Job search started in background."}
 
 # Resume tailoring endpoints
@@ -498,6 +534,7 @@ def tailor_resume_endpoint(job_id: int) -> dict:
     Returns:
         dict: Containing the tailored resume, cover letter, and U.S. HQ location.
     """
+    started_at = time.monotonic()
     conn = get_db_connection()
     job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     profile = conn.execute("SELECT base_resume_text, gemini_api_key, google_maps_api_key, resume_mode FROM profile LIMIT 1").fetchone()
@@ -573,6 +610,14 @@ def tailor_resume_endpoint(job_id: int) -> dict:
     """, (job_id,))
     conn.commit()
     conn.close()
+    capture_event(
+        "resume_tailored",
+        {
+            "result": "success",
+            "source_category": source_category(job["source"]),
+            "duration_bucket": duration_bucket(time.monotonic() - started_at),
+        },
+    )
     
     return {
         "success": True,
@@ -663,6 +708,7 @@ def apply_job(job_id: int, headed: bool = True) -> dict:
     Returns:
         dict: Success status and feedback message.
     """
+    started_at = time.monotonic()
     conn = get_db_connection()
     job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     app_row = conn.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)).fetchone()
@@ -721,6 +767,16 @@ def apply_job(job_id: int, headed: bool = True) -> dict:
     conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (lifecycle_status, job_id))
     conn.commit()
     conn.close()
+    capture_event(
+        "application_filled",
+        {
+            "result": "success",
+            "source_category": source_category(job["source"]),
+            "from_status": app_row["status"] if app_row["status"] in PIPELINE_STATUSES else "matched",
+            "to_status": lifecycle_status,
+            "duration_bucket": duration_bucket(time.monotonic() - started_at),
+        },
+    )
     
     return {
         "success": True,

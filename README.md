@@ -146,6 +146,14 @@ The server validates that the candidate set has not changed since the preview. I
 
 The app is designed for local access at `127.0.0.1`. Cross-origin browser access is intentionally disabled, and profile reads return only API-key configuration flags—not stored key values.
 
+### Optional anonymous analytics
+
+PostHog analytics is disabled unless `POSTHOG_PROJECT_TOKEN` is present in the process environment. `POSTHOG_HOST` is optional and defaults to the US ingestion endpoint; use the ingestion host for your PostHog region. The variable names are also listed in `backend/.env.example`, but JobApplier does not automatically read `.env` files or include any real token in the repository.
+
+When enabled, JobApplier creates a random installation UUID in the local ignored `data/` directory. It never uses the profile database ID and does not identify a person. Only `job_search_started`, `resume_tailored`, `application_filled`, and `job_lifecycle_updated` are sent, with allowlisted low-cardinality status, source-category, lifecycle-transition, duration-bucket, and application-version properties. Names, contact details, résumé or application text, employer and job details, URLs, search terms, filenames, paths, API keys, and database content are never included.
+
+Analytics capture is isolated from request handling and uses short network timeouts. Failures are silently dropped. GeoIP enrichment, session replay, automatic exception capture, and local-variable capture are disabled. To opt out, remove `POSTHOG_PROJECT_TOKEN` and restart JobApplier; the local installation UUID may be deleted separately if you do not plan to re-enable analytics.
+
 ### Startup troubleshooting
 
 The Windows launchers validate the project virtual environment before opening the dashboard and repair it when a usable Python installation is available. Use `run.bat` when Windows execution policy blocks `.ps1` files. If the dashboard was already open during an unsuccessful launch, close that tab and launch again. The browser opens only after the expected backend build responds, and local UI assets are served without stale caching. If port 8000 is already occupied by an older copy, stop that terminal with Ctrl+C before relaunching.
