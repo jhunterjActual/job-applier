@@ -197,6 +197,18 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertNotIn("triggerApplicationSubmission", script_source)
         self.assertIn("Apply Manually", script_source)
 
+    def test_launchers_use_the_configurable_default_port(self) -> None:
+        project_dir = Path(__file__).parent.parent
+        powershell_source = (project_dir / "run.ps1").read_text(encoding="utf-8")
+        batch_source = (project_dir / "run.bat").read_text(encoding="utf-8")
+
+        self.assertIn("[int]$Port = 8001", powershell_source)
+        self.assertIn("--port $Port", powershell_source)
+        self.assertIn('set "PORT=8001"', batch_source)
+        self.assertIn("--port %PORT%", batch_source)
+        self.assertNotIn("8000", powershell_source)
+        self.assertNotIn("8000", batch_source)
+
     def test_job_applier_brand_assets_and_manifest_are_wired(self) -> None:
         static_dir = Path(__file__).parent / "static"
         html_source = (static_dir / "index.html").read_text(encoding="utf-8")
