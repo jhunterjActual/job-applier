@@ -20,6 +20,7 @@ data/
 # Local environment variables
 .env
 .env.*
+!backend/.env.example
 
 # Private resume files and local outputs
 baseresume.md

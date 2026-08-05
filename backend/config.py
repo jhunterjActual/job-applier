@@ -8,6 +8,8 @@ DATA_DIR = WORKSPACE_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 OUTPUT_DIR = DATA_DIR / "output"
 DB_PATH = DATA_DIR / "jobapplier.db"
+ANALYTICS_INSTALLATION_ID_PATH = DATA_DIR / ".analytics-installation-id"
+DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com"
 
 # Ensure folders exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -35,4 +37,3 @@ def get_google_maps_api_key() -> str:
         str: The Google Maps API key, or empty string if not configured.
     """
     return os.environ.get("GOOGLE_MAPS_API_KEY") or GOOGLE_MAPS_API_KEY
-
