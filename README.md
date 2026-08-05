@@ -77,7 +77,9 @@ We have provided automated startup scripts in the root directory:
    ```
 
 The startup scripts will automatically set up a Python virtual environment, install requirements, download the browser binaries, start the FastAPI server, and open the dashboard in your default browser at:
-👉 **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)**
+👉 **[http://127.0.0.1:8001/](http://127.0.0.1:8001/)**
+
+Port `8001` is the default. To choose another port, run `.\run.ps1 -Port 9000` in PowerShell or `run.bat 9000` in Command Prompt.
 
 ---
 
@@ -100,9 +102,9 @@ If you prefer setting up manually or are on macOS/Linux:
    ```
 4. **Start the FastAPI Server**:
    ```bash
-   uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+   uvicorn app:app --host 127.0.0.1 --port 8001 --reload
    ```
-5. Open your browser and navigate to `http://127.0.0.1:8000/`.
+5. Open your browser and navigate to `http://127.0.0.1:8001/`.
 
 ---
 
@@ -156,4 +158,4 @@ Analytics capture is isolated from request handling and uses short network timeo
 
 ### Startup troubleshooting
 
-The Windows launchers validate the project virtual environment before opening the dashboard and repair it when a usable Python installation is available. Use `run.bat` when Windows execution policy blocks `.ps1` files. If the dashboard was already open during an unsuccessful launch, close that tab and launch again. The browser opens only after the expected backend build responds, and local UI assets are served without stale caching. If port 8000 is already occupied by an older copy, stop that terminal with Ctrl+C before relaunching.
+The Windows launchers validate the project virtual environment before opening the dashboard and repair it when a usable Python installation is available. Use `run.bat` when Windows execution policy blocks `.ps1` files. If the dashboard was already open during an unsuccessful launch, close that tab and launch again. The browser opens only after the expected backend build responds, and local UI assets are served without stale caching. If the configured port (default `8001`) is already occupied by an older copy, stop that terminal with Ctrl+C before relaunching.
