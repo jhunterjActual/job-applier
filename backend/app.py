@@ -1,8 +1,10 @@
 import os
 import json
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from posthog import identify_context, new_context, tag
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Literal, Optional
 from datetime import date, datetime, timedelta
@@ -15,10 +17,38 @@ from applier import fill_application_form
 from utils import generate_resume_pdf, generate_cover_letter_pdf, find_us_headquarters
 from lifecycle import PIPELINE_STATUSES, status_from_automation, undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
+from analytics import flush_posthog, get_posthog_client, initialize_posthog
 
 APP_BUILD = "20260803.8"
 
-app = FastAPI(title="AI Job Applier Agent API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize and flush the process-wide PostHog client."""
+    initialize_posthog()
+    try:
+        yield
+    finally:
+        flush_posthog()
+
+
+app = FastAPI(title="AI Job Applier Agent API", lifespan=lifespan)
+
+
+def capture_event(event: str, properties: Optional[dict] = None) -> None:
+    """Capture a request-bound product event when analytics is configured."""
+    posthog_client = get_posthog_client()
+    if posthog_client is not None:
+        posthog_client.capture(event, properties=properties)
+
+
+@app.exception_handler(Exception)
+async def capture_unhandled_exception(request, exc: Exception) -> JSONResponse:
+    """Send otherwise unhandled server exceptions to PostHog once globally."""
+    posthog_client = get_posthog_client()
+    if posthog_client is not None:
+        posthog_client.capture_exception(exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 @app.middleware("http")
@@ -28,6 +58,31 @@ async def prevent_stale_local_ui(request, call_next):
     if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, max-age=0"
     return response
+
+
+@app.middleware("http")
+async def identify_candidate_request(request, call_next):
+    """Bind the local candidate profile to all PostHog activity in this request."""
+    if get_posthog_client() is None:
+        return await call_next(request)
+
+    conn = get_db_connection()
+    try:
+        profile = conn.execute("SELECT id, name, email FROM profile LIMIT 1").fetchone()
+    finally:
+        conn.close()
+
+    if profile is None:
+        return await call_next(request)
+
+    with new_context():
+        identify_context(f"profile:{profile['id']}")
+        if profile["email"]:
+            tag("email", profile["email"])
+        if profile["name"]:
+            tag("name", profile["name"])
+        return await call_next(request)
+
 
 class ProfileUpdate(BaseModel):
     name: str
@@ -114,7 +169,8 @@ def update_profile(profile: ProfileUpdate) -> dict:
     """, (profile.name, profile.email, profile.phone, profile.github, profile.linkedin, profile.website, profile.base_resume_text, profile.resume_mode))
     conn.commit()
     conn.close()
-    
+
+    capture_event("profile_updated", {"resume_mode": profile.resume_mode})
     return {"success": True, "message": "Profile updated successfully."}
 
 
@@ -176,7 +232,11 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
         conn.execute("UPDATE profile SET base_resume_text = ?, suggested_keywords = '' WHERE id = 1", (resume_text,))
         conn.commit()
         conn.close()
-        
+
+        capture_event(
+            "resume_uploaded",
+            {"file_type": os.path.splitext(file.filename)[1].lstrip(".").lower(), "text_length": len(resume_text)},
+        )
         return {"success": True, "resume_text": resume_text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
@@ -240,6 +300,10 @@ def change_job_lifecycle(job_id: int, req: LifecycleUpdateRequest) -> dict:
             source="manual",
         )
         conn.commit()
+        capture_event(
+            "job_lifecycle_updated",
+            {"from_status": result["previous_status"], "to_status": result["status"], "method": req.method or "unspecified"},
+        )
         return {"success": True, **result}
     except LookupError as exc:
         conn.rollback()
@@ -262,6 +326,7 @@ def undo_job_lifecycle(job_id: int) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         result = undo_latest_lifecycle_change(conn, job_id)
         conn.commit()
+        capture_event("job_lifecycle_undone", {"restored_status": result["status"]})
         return {"success": True, **result}
     except LookupError as exc:
         conn.rollback()
@@ -310,6 +375,7 @@ def cleanup_jobs(req: CleanupRequest) -> dict:
         conn.close()
 
     verbs = {"archive": "archived", "delete": "permanently deleted", "restore": "restored"}
+    capture_event("jobs_cleaned", {"action": req.action, "affected_count": affected})
     return {
         "success": True,
         "action": req.action,
@@ -340,6 +406,7 @@ def delete_job(job_id: int) -> dict:
         # Delete job
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         conn.commit()
+        capture_event("job_deleted")
         return {"success": True, "message": "Job posting deleted successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
@@ -430,6 +497,7 @@ def verify_job_posting(job_id: int) -> dict:
         result = {"success": True, "expired": True, "message": "Listing appears closed or unavailable."}
     conn.commit()
     conn.close()
+    capture_event("job_verified", {"expired": result["expired"]})
     return result
 
 @app.post("/api/jobs/search")
@@ -484,6 +552,14 @@ def search_jobs(req: SearchRequest, background_tasks: BackgroundTasks) -> dict:
         conn.close()
     IS_SEARCHING = True
     background_tasks.add_task(run_search_wrapper, req.keywords, req.location)
+    capture_event(
+        "job_search_started",
+        {
+            "has_location": bool((req.location or "").strip()),
+            "saved_search": req.save_search,
+            "schedule_frequency": req.schedule_frequency,
+        },
+    )
     return {"success": True, "message": "Job search started in background."}
 
 # Resume tailoring endpoints
@@ -573,7 +649,11 @@ def tailor_resume_endpoint(job_id: int) -> dict:
     """, (job_id,))
     conn.commit()
     conn.close()
-    
+
+    capture_event(
+        "resume_tailored",
+        {"resume_mode": profile["resume_mode"] or "general_professional", "pdf_page_count": pdf_result["page_count"]},
+    )
     return {
         "success": True,
         "tailored_resume": res["tailored_resume"],
@@ -648,6 +728,10 @@ def update_tailored_details(job_id: int, req: MaterialsUpdateRequest) -> dict:
     """, (resume_text, output_path, cover_letter, job_id))
     conn.commit()
     conn.close()
+    capture_event(
+        "tailored_materials_updated",
+        {"resume_mode": resume_mode, "pdf_page_count": pdf_result["page_count"]},
+    )
     return {"success": True, "pdf_page_count": pdf_result["page_count"], "pdf_compact": pdf_result["compact"]}
 
 # Auto-apply endpoint
@@ -721,7 +805,16 @@ def apply_job(job_id: int, headed: bool = True) -> dict:
     conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (lifecycle_status, job_id))
     conn.commit()
     conn.close()
-    
+
+    capture_event(
+        "application_filled",
+        {
+            "status": lifecycle_status,
+            "submission_attempted": res.get("submission_attempted", False),
+            "submission_confirmed": res.get("submission_confirmed", False),
+            "review_field_count": len(review_fields),
+        },
+    )
     return {
         "success": True,
         "message": res.get("msg", "Application submitted!"),

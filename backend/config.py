@@ -1,5 +1,8 @@
 import os
+from functools import lru_cache
 from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -13,6 +16,26 @@ DB_PATH = DATA_DIR / "jobapplier.db"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    debug: bool = False
+    posthog_project_token: str | None = None
+    posthog_host: str | None = None
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return cached settings for application dependencies and lifecycle hooks."""
+    return Settings()
+
 
 # API Keys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
