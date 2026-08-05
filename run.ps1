@@ -1,4 +1,9 @@
 # Start Script for AI Job Applier Agent
+param(
+    [ValidateRange(1, 65535)]
+    [int]$Port = 8001
+)
+
 $ErrorActionPreference = "Stop"
 
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -58,13 +63,14 @@ Write-Host "Python environment verified." -ForegroundColor Green
 
 # Open the UI only after the backend responds, so a failed launch cannot leave
 # a misleading cached dashboard in the browser.
-Start-ThreadJob {
+Start-ThreadJob -ArgumentList $Port -ScriptBlock {
+    param([int]$Port)
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
         Start-Sleep -Seconds 1
         try {
-            $version = Invoke-RestMethod "http://127.0.0.1:8000/api/version" -TimeoutSec 1
+            $version = Invoke-RestMethod "http://127.0.0.1:$Port/api/version" -TimeoutSec 1
             if ($version.build -eq "20260804.1") {
-                Start-Process "http://127.0.0.1:8000/?build=20260804.1"
+                Start-Process "http://127.0.0.1:$Port/?build=20260804.1"
                 return
             }
         } catch { }
@@ -73,6 +79,6 @@ Start-ThreadJob {
 } | Out-Null
 
 Write-Host "Launching FastAPI Backend..." -ForegroundColor Yellow
-Write-Host "Access the Dashboard at http://127.0.0.1:8000/" -ForegroundColor Green
+Write-Host "Access the Dashboard at http://127.0.0.1:$Port/" -ForegroundColor Green
 Write-Host "Press Ctrl+C to shut down the agent." -ForegroundColor Magenta
-& $VenvPython -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+& $VenvPython -m uvicorn app:app --host 127.0.0.1 --port $Port --reload
