@@ -4,8 +4,8 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 
 ## P0 - Reliability, safety, and document integrity
 
-- [ ] Retire automatic browser-based application filling and submission attempts, including headed-mode controls and automation-specific retry states; replace them with a dependable guided-manual flow that opens the verified posting, presents the prepared materials and application checklist, and records progress only when the user confirms it.
-- [ ] Make every manual-application artifact explicit and downloadable: persist the generated cover letter as a safely named `.txt` file alongside the resume PDF, regenerate it after edits, and expose clearly labeled Resume PDF and Cover Letter TXT downloads from both Search & Match and Application Logs.
+- [x] Retire automatic browser-based application filling and submission attempts, including headed-mode controls and automation-specific retry states; replace them with a dependable guided-manual flow that opens the verified posting, presents the prepared materials and application checklist, and records progress only when the user confirms it.
+- [x] Make every manual-application artifact explicit and downloadable: persist the generated cover letter as a safely named `.txt` file alongside the resume PDF, regenerate it after edits, and expose clearly labeled Resume PDF and Cover Letter TXT downloads from both Search & Match and Application Logs.
 - [x] Prevent cover-letter upload files from overwriting tailored resume PDFs.
 - [x] Distinguish `form_filled`, unverified `submitted`, and destination-confirmed `applied` states.
 - [x] Record lifecycle timestamps and submission evidence without treating tailoring as an application date.
@@ -30,6 +30,8 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [x] Add saved searches, duplicate detection, and on-demand expired-posting checks.
 - [x] Add optional scheduled alerts for saved searches.
 - [x] Detect job-source format drift using provider health checks, expected content/selector contracts, and rejection-rate baselines; alert the user when a provider appears incompatible instead of silently returning no results, including a safe diagnostic summary and affected provider.
+- [ ] Make Lever source diagnostics resilient and specific: use the official read-only Lever Postings JSON API as the primary job-detail source; classify missing, removed, or expired postings as stale instead of format drift; reserve format-drift alerts for successful responses with invalid schemas; retain privacy-safe rejection-category counts; and use browser scraping only when the API is unavailable.
+- [x] Add a saved profile toggle to prefer a U.S. headquarters address when an employer has multiple headquarters, incorporate it into address resolution for unemployment reporting, and reject non-U.S. Places matches from the U.S.-preferred lookup before a verified global fallback.
 - [x] Add sortable/filterable job results with status and a user-adjustable minimum match-score control.
 - [x] Enrich job results with normalized location, work arrangement, compensation, date found, and source fields.
 - [x] Add editable resume and cover-letter preview with PDF regeneration before applying.

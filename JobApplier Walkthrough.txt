@@ -8,24 +8,23 @@ We have built a state-of-the-art, self-contained AI Job Search & Application Age
 
 1. **Dashboard & UI Interface**:
    - High-fidelity dark mode styling, card glow, and clean fonts.
-   - Live timeline activity stream reporting browser automation logs.
+   - Live timeline activity stream reporting searches, tailoring, and lifecycle changes.
    - Status indicators verifying Gemini API key connectivity.
 2. **AI Resume & Cover Letter Tailoring (`tailor.py`)**:
    - Integrates with Gemini (`gemini-2.5-flash`) to parse base resumes and job descriptions.
    - Generates tailored resumes in Markdown and crafts customized cover letters.
    - Converts Markdown resumes and cover letters into clean, print-ready PDF files using Playwright.
-3. **Automated Browser Applier (`applier.py`)**:
-   - Navigates Greenhouse, Lever, and other job boards.
-   - Dynamically extracts interactive inputs, textareas, selects, and file uploads.
-   - Uses the Gemini API to analyze fields and match candidate profile data to form inputs.
-   - Autonomously types text, makes dropdown selections, and uploads PDFs (with support for **Headed mode** so you can watch the agent apply in real-time).
+3. **Guided Manual Application Workflow**:
+   - Presents an application checklist alongside editable tailored materials.
+   - Persists and downloads a tailored resume PDF and cover-letter TXT with safe, readable filenames.
+   - Opens the verified employer posting while leaving all form answers and submission decisions under the user's control.
 4. **Job Posting Search & Match Crawler (`searcher.py`)**:
    - DuckDuckGo crawling to find Lever & Greenhouse links matching target keywords.
    - Automated profile matching score (0-100%) and key bulleted match analyses.
 5. **Applications Database & Logging (`database.py`, `utils.py`)**:
    - Tracks found jobs and matches.
    - Automatically queries Gemini to find the U.S. Headquarters location of companies.
-   - Logs: Company name, Position title, Date applied, U.S. Headquarters location, Status, and downloadable PDF resume files.
+   - Logs: Company name, Position title, Date applied, U.S. Headquarters location, Status, and downloadable resume and cover-letter files.
 
 ---
 
@@ -62,14 +61,14 @@ The script will automatically activate the Python virtual environment, start the
    - Go to the **Search & Match** tab.
    - Enter job keywords (e.g., `"React Developer Remote"`) and location.
    - Click **Search & Analyze**.
-   - The browser agent will query DuckDuckGo and display matching job postings along with a match score (e.g. `85%`) and key pros/cons.
+   - JobApplier will query Yahoo Search for supported ATS postings and display valid matches with a score (e.g. `85%`) and key pros/cons.
 3. **Tailor Materials**:
    - Click **Tailor Materials** next to a matched job.
    - The AI will generate a tailored PDF resume and cover letter.
    - Click **View Materials** to review the tailored cover letter text and check the output path of the resume.
-4. **Submit Application**:
-   - Check the **Watch Application in Browser** toggle (headed mode) if you want to watch the agent fill out the form.
-   - Click **Submit Application Now**.
-   - A Chromium browser window will pop up, auto-fill all text inputs, select dropdowns, attach the tailored resume PDF, and submit the application.
+4. **Complete the Application**:
+   - Click **Apply Manually**, review and save any edits, then download the **Resume PDF** and **Cover Letter TXT**.
+   - Click **Open Application Site** and complete the employer's form yourself.
+   - Return to JobApplier and click **Mark Applied** to record the actual date, method, notes, and follow-up date.
 5. **View Logs**:
-   - Inspect the **Application Logs** tab to view your log history detailing Company, Position, Application Date, and U.S. Headquarters, and download the tailored resume PDFs directly!
+   - Inspect the **Application Logs** tab to view Company, Position, Application Date, U.S. Headquarters, and status, and download both generated artifacts directly.

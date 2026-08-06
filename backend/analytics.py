@@ -15,9 +15,8 @@ import config
 EVENT_SCHEMAS = {
     "job_search_started": frozenset({"result", "source_category"}),
     "resume_tailored": frozenset({"result", "source_category", "duration_bucket"}),
-    "application_filled": frozenset(
-        {"result", "source_category", "from_status", "to_status", "duration_bucket"}
-    ),
+    "manual_application_opened": frozenset({"result", "source_category", "from_status"}),
+    "material_downloaded": frozenset({"result", "source_category", "material_type"}),
     "job_lifecycle_updated": frozenset(
         {"result", "source_category", "from_status", "to_status"}
     ),
@@ -51,6 +50,7 @@ LIFECYCLE_VALUES = frozenset(
     }
 )
 DURATION_BUCKET_VALUES = frozenset({"under_1s", "1_to_5s", "5_to_30s", "30s_plus"})
+MATERIAL_TYPE_VALUES = frozenset({"resume", "cover_letter"})
 SDK_PROPERTY_ALLOWLIST = frozenset(
     {"$lib", "$lib_version", "$geoip_disable", "$is_server", "$process_person_profile"}
 )
@@ -123,6 +123,8 @@ def _properties_are_valid(event: str, properties: dict) -> bool:
     if "to_status" in schema and properties.get("to_status") not in LIFECYCLE_VALUES:
         return False
     if "duration_bucket" in schema and properties.get("duration_bucket") not in DURATION_BUCKET_VALUES:
+        return False
+    if "material_type" in schema and properties.get("material_type") not in MATERIAL_TYPE_VALUES:
         return False
     version = properties.get("application_version")
     return isinstance(version, str) and bool(_VERSION_PATTERN.fullmatch(version))

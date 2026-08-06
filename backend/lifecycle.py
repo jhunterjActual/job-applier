@@ -1,6 +1,5 @@
 """Application lifecycle rules shared by the API and regression tests."""
 
-from typing import Any, Mapping
 from datetime import date, datetime
 import json
 import sqlite3
@@ -26,15 +25,6 @@ PIPELINE_STATUSES = (
 )
 
 APPLIED_OR_LATER = frozenset({"applied", "interview", "offer", "rejected", "withdrawn", "closed"})
-
-
-def status_from_automation(result: Mapping[str, Any]) -> str:
-    """Map browser evidence to a lifecycle state without overstating success."""
-    if result.get("submission_confirmed"):
-        return "applied"
-    if result.get("submission_attempted"):
-        return "submitted"
-    return "form_filled"
 
 
 def update_lifecycle(

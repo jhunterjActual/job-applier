@@ -3,7 +3,7 @@ const API_URL = "";
 
 // State variables
 let currentTab = "dashboard";
-let selectedJobIdForApplying = null;
+let selectedMaterialsJobId = null;
 let cleanupPreview = null;
 let cleanupActionsReady = false;
 let cleanupActionEnableTimer = null;
@@ -33,6 +33,7 @@ const pApiKey = document.getElementById("p-apikey");
 const pGoogleApiKey = document.getElementById("p-google-apikey");
 const pResume = document.getElementById("p-resume");
 const pResumeMode = document.getElementById("p-resume-mode");
+const pPreferUsHeadquarters = document.getElementById("p-prefer-us-headquarters");
 const resumeFileUpload = document.getElementById("resume-file-upload");
 const toggleApiVisibilityBtn = document.getElementById("toggle-api-visibility");
 const toggleGoogleApiVisibilityBtn = document.getElementById("toggle-google-api-visibility");
@@ -69,9 +70,10 @@ const modalTabBtns = document.querySelectorAll(".modal-tab-btn");
 const modalTabContents = document.querySelectorAll(".modal-tab-content");
 const tailoredResumeDisplay = document.getElementById("tailored-resume-display");
 const coverLetterDisplay = document.getElementById("cover-letter-display");
-const applyingHeadedCheckbox = document.getElementById("applying-headed-checkbox");
-const applyJobConfirmBtn = document.getElementById("apply-job-confirm-btn");
 const saveMaterialsBtn = document.getElementById("save-materials-btn");
+const downloadResumeBtn = document.getElementById("download-resume-btn");
+const downloadCoverLetterBtn = document.getElementById("download-cover-letter-btn");
+const openManualApplicationBtn = document.getElementById("open-manual-application-btn");
 
 const loadingModal = document.getElementById("loading-modal");
 const loadingTitle = document.getElementById("loading-title");
@@ -112,7 +114,6 @@ document.addEventListener("DOMContentLoaded", () => {
     // Modal controls
     closeTailorModalBtns.forEach(btn => btn.addEventListener("click", hideTailorModal));
     setupModalTabs();
-    bindEvent(applyJobConfirmBtn, "click", triggerApplicationSubmission);
     bindEvent(saveMaterialsBtn, "click", saveTailoredMaterials);
     closeCleanupModalBtns.forEach(btn => btn.addEventListener("click", hideCleanupModal));
     bindEvent(archiveUntouchedBtn, "click", () => runCleanupAction("archive"));
@@ -312,10 +313,10 @@ function switchTab(tabId) {
     
     // Update headers text
     const tabTitles = {
-        dashboard: { title: "Dashboard Overview", sub: "Track your automated job application progress." },
+        dashboard: { title: "Dashboard Overview", sub: "Track tailored materials and confirmed application progress." },
         profile: { title: "Profile & Resume", sub: "Setup your contact information and base resume." },
         search: { title: "Search & Match Jobs", sub: "Find Greenhouse, Lever, Ashby, and SmartRecruiters openings matching your skill set." },
-        logs: { title: "Application Logs", sub: "View history and downloaded tailored resumes." }
+        logs: { title: "Application Logs", sub: "View history and download tailored resumes and cover letters." }
     };
     
     pageTitle.innerText = tabTitles[tabId].title;
@@ -370,7 +371,7 @@ function setupModalTabs() {
 }
 
 // Show/Hide Helpers
-function showLoading(title, subtitle = "Please wait while the AI handles the paperwork.") {
+function showLoading(title, subtitle = "Please wait while JobApplier prepares your request.") {
     loadingTitle.innerText = title;
     loadingSubtitle.innerText = subtitle;
     loadingModal.classList.add("active");
@@ -380,9 +381,12 @@ function hideLoading() {
     loadingModal.classList.remove("active");
 }
 
-function showTailorModal(resumeMarkdown, coverLetterText) {
+function showTailorModal(resumeMarkdown, coverLetterText, jobId) {
     tailoredResumeDisplay.value = resumeMarkdown;
     coverLetterDisplay.value = coverLetterText;
+    downloadResumeBtn.href = `${API_URL}/api/jobs/${jobId}/materials/resume`;
+    downloadCoverLetterBtn.href = `${API_URL}/api/jobs/${jobId}/materials/cover-letter`;
+    openManualApplicationBtn.href = `${API_URL}/api/jobs/${jobId}/apply-manually`;
     tailorModal.classList.add("active");
 }
 
@@ -542,6 +546,7 @@ async function loadProfile() {
             pGoogleApiKey.placeholder = googleMapsKeyConfigured ? "Saved — enter a new key to replace" : "Enter optional Google Maps API key";
             pResume.value = profile.base_resume_text || "";
             pResumeMode.value = profile.resume_mode || "general_professional";
+            pPreferUsHeadquarters.checked = profile.prefer_us_headquarters !== 0;
             
             userDisplayName.innerText = profile.name || "Candidate";
             updateApiKeyStatus(geminiKeyConfigured);
@@ -572,7 +577,8 @@ async function saveProfile(e) {
         linkedin: pLinkedin.value.trim(),
         website: pWebsite.value.trim(),
         base_resume_text: pResume.value.trim(),
-        resume_mode: pResumeMode.value
+        resume_mode: pResumeMode.value,
+        prefer_us_headquarters: pPreferUsHeadquarters.checked
     };
     
     try {
@@ -749,9 +755,12 @@ function buildJobRow(job) {
         actions.appendChild(createActionButton("Mark Applied", "fa-solid fa-circle-check", "btn btn-secondary btn-sm", () => openLifecycleEditor(jobId)));
     } else if (["tailored", "form_filled", "submitted"].includes(job.status)) {
         actions.appendChild(createActionButton("View Materials", "fa-solid fa-eye", "btn btn-secondary btn-sm", () => viewTailoredMaterials(jobId)));
-        actions.appendChild(createActionButton(job.status === "tailored" ? "Apply Now" : "Retry / Verify", "fa-solid fa-paper-plane", "btn btn-primary btn-sm", () => openApplyConfirmation(jobId)));
+        actions.appendChild(createActionButton("Apply Manually", "fa-solid fa-arrow-up-right-from-square", "btn btn-primary btn-sm", () => viewTailoredMaterials(jobId)));
         actions.appendChild(createActionButton("Mark Applied", "fa-solid fa-circle-check", "btn btn-secondary btn-sm", () => openLifecycleEditor(jobId)));
     } else {
+        if (job.has_materials) {
+            actions.appendChild(createActionButton("View Materials", "fa-solid fa-eye", "btn btn-secondary btn-sm", () => viewTailoredMaterials(jobId)));
+        }
         actions.appendChild(createActionButton("Update Status", "fa-solid fa-pen", "btn btn-secondary btn-sm", () => openLifecycleEditor(jobId)));
     }
     actions.appendChild(createActionButton("", "fa-solid fa-rotate", "btn btn-secondary btn-sm btn-icon-only", () => verifyJobPosting(jobId), "Verify listing is active"));
@@ -978,10 +987,10 @@ async function viewTailoredMaterials(jobId) {
         
         if (result.success) {
             hideLoading();
-            selectedJobIdForApplying = jobId;
+            selectedMaterialsJobId = jobId;
             
             const resumeText = result.tailored_resume || "This material was generated before editable source retention was enabled. Regenerate the tailored materials to edit the resume text.";
-            showTailorModal(resumeText, result.cover_letter);
+            showTailorModal(resumeText, result.cover_letter, jobId);
         } else {
             hideLoading();
             alert(result.message || "Failed to load materials.");
@@ -993,7 +1002,7 @@ async function viewTailoredMaterials(jobId) {
 }
 
 async function saveTailoredMaterials() {
-    if (!selectedJobIdForApplying) return;
+    if (!selectedMaterialsJobId) return;
     const tailoredResume = tailoredResumeDisplay.value.trim();
     const coverLetter = coverLetterDisplay.value.trim();
     if (!tailoredResume || !coverLetter) {
@@ -1002,7 +1011,7 @@ async function saveTailoredMaterials() {
     }
     showLoading("Saving Reviewed Materials...", "Regenerating the attached PDF from your edits.");
     try {
-        const response = await fetch(`${API_URL}/api/jobs/${selectedJobIdForApplying}/tailored`, {
+        const response = await fetch(`${API_URL}/api/jobs/${selectedMaterialsJobId}/tailored`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ tailored_resume: tailoredResume, cover_letter: coverLetter })
@@ -1018,59 +1027,7 @@ async function saveTailoredMaterials() {
     }
 }
 
-// Open application confirmation
-function openApplyConfirmation(jobId) {
-    selectedJobIdForApplying = jobId;
-    viewTailoredMaterials(jobId);
-}
-
-// Trigger Browser Automation Application
-async function triggerApplicationSubmission() {
-    if (!selectedJobIdForApplying) return;
-    
-    hideTailorModal();
-    const headed = applyingHeadedCheckbox.checked;
-    
-    showLoading("Submitting Application...", headed 
-        ? "Opening Chromium. Keep an eye on the browser window to watch the submission!" 
-        : "Running background Chromium browser to input fields and upload resume."
-    );
-    
-    logActivity("Automation Started", `Filing application for Job ID #${selectedJobIdForApplying} (Headed: ${headed})...`, "rocket");
-    
-    try {
-        const res = await fetch(`${API_URL}/api/jobs/${selectedJobIdForApplying}/apply?headed=${headed}`, {
-            method: "POST"
-        });
-        const result = await res.json();
-        
-        hideLoading();
-        
-        if (result.success) {
-            const reviewNote = result.fields_needing_review?.length
-                ? `\n\nReview required for: ${result.fields_needing_review.join(", ")}`
-                : "";
-            const activityType = result.submission_confirmed ? "success" : "warning";
-            logActivity(result.submission_confirmed ? "Application Confirmed" : "Application Needs Verification", result.message, activityType);
-            alert(`${result.message}${reviewNote}`);
-            
-            // Reload logs and jobs
-            await loadJobs();
-            await loadLogs();
-            await updateDashboardStats();
-        } else {
-            const errorMsg = result.detail || result.error || "Unknown error";
-            logActivity("Application Failed", errorMsg, "error");
-            alert("Application filing failed: " + errorMsg);
-        }
-    } catch (e) {
-        hideLoading();
-        console.error(e);
-        logActivity("Automation Error", "Could not complete browser automation sequence.", "error");
-    }
-}
-
-// Load Application Submission History Logs
+// Load generated materials and manually maintained application history.
 async function loadLogs() {
     try {
         const res = await fetch(`${API_URL}/api/applications`);
@@ -1083,7 +1040,7 @@ async function loadLogs() {
                 <tr>
                     <td colspan="6" class="table-empty-state">
                         <i class="fa-solid fa-paper-plane"></i>
-                        <p>No jobs submitted yet. Tailor and apply from the "Search & Match" tab.</p>
+                        <p>No application materials yet. Tailor a job from the "Search & Match" tab.</p>
                     </td>
                 </tr>
             `;
@@ -1106,15 +1063,21 @@ async function loadLogs() {
             tr.appendChild(statusCell);
 
             const fileCell = createElement("td");
-            if (log.tailored_resume_path) {
-                const pdfFilename = String(log.tailored_resume_path).split(/[\\/]/).pop();
-                const downloadLink = createElement("a", "btn btn-secondary btn-sm");
-                downloadLink.href = `${API_URL}/output/${encodeURIComponent(pdfFilename)}`;
-                downloadLink.target = "_blank";
-                downloadLink.rel = "noopener noreferrer";
-                downloadLink.download = "";
-                downloadLink.append(createElement("i", "fa-solid fa-file-pdf"), document.createTextNode(" Resume"));
-                fileCell.appendChild(downloadLink);
+            if (log.tailored_resume_path && log.job_id) {
+                const fileActions = createElement("div", "file-actions");
+                const resumeLink = createElement("a", "btn btn-secondary btn-sm");
+                resumeLink.href = `${API_URL}/api/jobs/${log.job_id}/materials/resume`;
+                resumeLink.download = "";
+                resumeLink.append(createElement("i", "fa-solid fa-file-pdf"), document.createTextNode(" Resume PDF"));
+                fileActions.appendChild(resumeLink);
+                if (log.cover_letter || log.cover_letter_path) {
+                    const coverLetterLink = createElement("a", "btn btn-secondary btn-sm");
+                    coverLetterLink.href = `${API_URL}/api/jobs/${log.job_id}/materials/cover-letter`;
+                    coverLetterLink.download = "";
+                    coverLetterLink.append(createElement("i", "fa-solid fa-file-lines"), document.createTextNode(" Cover Letter TXT"));
+                    fileActions.appendChild(coverLetterLink);
+                }
+                fileCell.appendChild(fileActions);
             } else {
                 fileCell.appendChild(createElement("span", "text-muted", "No generated resume"));
             }

@@ -5,13 +5,10 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
-from applier import (
-    _confirmation_markers,
-    build_cover_letter_upload_path,
-    detect_submission_confirmation,
-    field_requires_review,
-)
-from lifecycle import status_from_automation, undo_latest_lifecycle_change, update_lifecycle
+import app as app_module
+import materials as materials_module
+from lifecycle import undo_latest_lifecycle_change, update_lifecycle
+from materials import material_download_name, persist_cover_letter, resolve_output_file
 from database import get_db_connection
 from job_cleanup import apply_cleanup, cleanup_preview
 from searcher import (
@@ -30,31 +27,28 @@ from tailor import (
     finalize_cover_letter,
     tailor_resume_and_cover_letter,
 )
-from utils import markdown_to_html
+from utils import _headquarters_query, _looks_like_us_address, find_us_headquarters, markdown_to_html
 
 
-class ApplicationSafetyTests(unittest.TestCase):
-    class _FakeLocator:
-        def __init__(self, page) -> None:
-            self.page = page
-
-        def inner_text(self, timeout: int = 0) -> str:
-            return self.page.body
-
-    class _FakePage:
-        def __init__(self, url: str, body: str) -> None:
-            self.url = url
-            self.body = body
-
-        def locator(self, selector: str):
-            return ApplicationSafetyTests._FakeLocator(self)
-
-    def test_cover_letter_path_never_aliases_resume(self) -> None:
+class ApplicationMaterialsSafetyTests(unittest.TestCase):
+    def test_cover_letter_is_persisted_separately_as_utf8_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            resume = Path(temp_dir) / "tailored_resume_12.pdf"
-            cover = build_cover_letter_upload_path(str(resume))
-            self.assertNotEqual(resume.resolve(), cover.resolve())
-            self.assertEqual("tailored_resume_12_cover_letter.txt", cover.name)
+            cover_path = Path(persist_cover_letter(12, "Dear Hiring Team,\n\nHello.", Path(temp_dir)))
+            self.assertEqual("cover_letter_12.txt", cover_path.name)
+            self.assertEqual("Dear Hiring Team,\n\nHello.\n", cover_path.read_text(encoding="utf-8"))
+            self.assertEqual(cover_path, resolve_output_file(cover_path, ".txt", Path(temp_dir)))
+
+    def test_material_resolution_rejects_files_outside_output_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as other_dir:
+            outside = Path(other_dir) / "resume.pdf"
+            outside.write_bytes(b"pdf")
+            with self.assertRaisesRegex(ValueError, "invalid"):
+                resolve_output_file(outside, ".pdf", Path(temp_dir))
+
+    def test_download_names_are_safe_and_readable(self) -> None:
+        filename = material_download_name("Example / Corp", "VP: Data & AI", "cover-letter", ".txt")
+        self.assertEqual("example-corp-vp-data-ai-cover-letter.txt", filename)
+        self.assertNotIn("/", filename)
 
     def test_cover_letter_date_placeholders_are_resolved(self) -> None:
         expected = "August 3, 2026"
@@ -67,35 +61,57 @@ class ApplicationSafetyTests(unittest.TestCase):
                 self.assertIn(expected, result)
                 self.assertNotIn(placeholder, result)
 
-    def test_sensitive_fields_always_require_review(self) -> None:
-        for label in (
-            "Will you require visa sponsorship?",
-            "Desired salary",
-            "Veteran status",
-            "I certify that this information is true",
-        ):
-            with self.subTest(label=label):
-                self.assertTrue(field_requires_review({"label": label}))
-        self.assertFalse(field_requires_review({"label": "First name"}))
+    def test_downloads_and_manual_open_do_not_mark_job_applied(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "materials.db"
+            resume_path = root / "tailored_resume_1.pdf"
+            resume_path.write_bytes(b"%PDF-test")
+            cover_path = persist_cover_letter(1, "Dear Hiring Team,", root)
 
-    def test_unconfirmed_submission_is_not_applied(self) -> None:
-        self.assertEqual("form_filled", status_from_automation({}))
-        self.assertEqual("submitted", status_from_automation({"submission_attempted": True}))
-        self.assertEqual(
-            "applied",
-            status_from_automation({"submission_attempted": True, "submission_confirmed": True}),
-        )
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE jobs (
+                    id INTEGER PRIMARY KEY, company TEXT, title TEXT, url TEXT,
+                    source TEXT, status TEXT
+                );
+                CREATE TABLE applications (
+                    id INTEGER PRIMARY KEY, job_id INTEGER, company TEXT, position TEXT,
+                    tailored_resume_path TEXT, cover_letter_path TEXT, cover_letter TEXT,
+                    status TEXT
+                );
+            """)
+            connection.execute(
+                "INSERT INTO jobs VALUES (1, ?, ?, ?, ?, ?)",
+                ("Example Corp", "VP Data", "https://jobs.example.test/1", "lever", "tailored"),
+            )
+            connection.execute(
+                "INSERT INTO applications VALUES (1, 1, ?, ?, ?, ?, ?, ?)",
+                ("Example Corp", "VP Data", str(resume_path), cover_path, "Dear Hiring Team,", "tailored"),
+            )
+            connection.commit()
+            connection.close()
 
-    def test_confirmation_text_must_be_new_after_submit(self) -> None:
-        page = self._FakePage("https://example.test/apply", "Application submitted means you have completed all steps")
-        baseline = _confirmation_markers(page)
-        confirmed, _ = detect_submission_confirmation(page, page.url, baseline)
-        self.assertFalse(confirmed)
-        page.body = "Thank you for applying"
-        confirmed, evidence = detect_submission_confirmation(page, page.url, baseline)
-        self.assertTrue(confirmed)
-        self.assertTrue(evidence.startswith("confirmation_text:"))
+            def connection_factory():
+                test_connection = sqlite3.connect(database_path)
+                test_connection.row_factory = sqlite3.Row
+                return test_connection
 
+            with (
+                patch.object(app_module, "get_db_connection", connection_factory),
+                patch.object(materials_module.config, "OUTPUT_DIR", root),
+            ):
+                resume_response = app_module.download_tailored_resume(1)
+                cover_response = app_module.download_cover_letter(1)
+                redirect_response = app_module.open_manual_application(1)
+
+            self.assertIn("example-corp-vp-data-resume.pdf", resume_response.headers["content-disposition"])
+            self.assertIn("example-corp-vp-data-cover-letter.txt", cover_response.headers["content-disposition"])
+            self.assertEqual("https://jobs.example.test/1", redirect_response.headers["location"])
+            connection = connection_factory()
+            self.assertEqual("tailored", connection.execute("SELECT status FROM jobs WHERE id = 1").fetchone()[0])
+            self.assertEqual("tailored", connection.execute("SELECT status FROM applications WHERE job_id = 1").fetchone()[0])
+            connection.close()
 
 class ResumeRenderingTests(unittest.TestCase):
     def test_tailoring_uses_validated_structured_response(self) -> None:
@@ -148,17 +164,19 @@ class FrontendStartupTests(unittest.TestCase):
         html_source = (static_dir / "index.html").read_text(encoding="utf-8")
         for element_id in (
             "profile-form", "resume-file-upload", "search-form", "refresh-jobs-btn",
-            "cleanup-jobs-btn", "refresh-logs-btn", "apply-job-confirm-btn",
+            "cleanup-jobs-btn", "refresh-logs-btn", "open-manual-application-btn",
             "archive-untouched-btn", "delete-untouched-btn", "restore-archived-btn",
             "lifecycle-form", "undo-lifecycle-btn", "save-materials-btn",
+            "download-resume-btn", "download-cover-letter-btn",
             "saved-search-select", "p-resume-mode",
+            "p-prefer-us-headquarters",
             "lifecycle-applied-calendar-btn", "saved-search-frequency", "provider-alerts",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=", html_source)
-        self.assertIn("index.css?v=", html_source)
+        self.assertIn("app.js?v=20260806-1", html_source)
+        self.assertIn("index.css?v=20260806-1", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -166,7 +184,19 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260804.1", source)
+                self.assertIn("20260806.1", source)
+
+    def test_manual_application_flow_replaces_browser_submission(self) -> None:
+        project_dir = Path(__file__).parent.parent
+        app_source = (project_dir / "backend" / "app.py").read_text(encoding="utf-8")
+        html_source = (project_dir / "backend" / "static" / "index.html").read_text(encoding="utf-8")
+        script_source = (project_dir / "backend" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertFalse((project_dir / "backend" / "applier.py").exists())
+        self.assertNotIn('@app.post("/api/jobs/{job_id}/apply")', app_source)
+        self.assertIn('@app.get("/api/jobs/{job_id}/apply-manually")', app_source)
+        self.assertNotIn("Submit Application Now", html_source)
+        self.assertNotIn("triggerApplicationSubmission", script_source)
+        self.assertIn("Apply Manually", script_source)
 
     def test_launchers_use_the_configurable_default_port(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -231,6 +261,75 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn('result.pop("google_maps_api_key"', app_source)
 
 
+class HeadquartersPreferenceTests(unittest.TestCase):
+    def test_profile_save_persists_disabled_us_preference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "profile.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript("""
+                CREATE TABLE profile (
+                    id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT,
+                    github TEXT, linkedin TEXT, website TEXT, base_resume_text TEXT,
+                    resume_mode TEXT, prefer_us_headquarters INTEGER,
+                    suggested_keywords TEXT
+                );
+                INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 1, '');
+            """)
+            connection.close()
+
+            def open_test_database():
+                return sqlite3.connect(db_path)
+
+            profile = app_module.ProfileUpdate(
+                name="Candidate", email="candidate@example.test", phone="",
+                github="", linkedin="", website="", base_resume_text="Resume",
+                resume_mode="general_professional", prefer_us_headquarters=False,
+            )
+            with patch.object(app_module, "get_db_connection", side_effect=open_test_database):
+                app_module.update_profile(profile)
+
+            connection = sqlite3.connect(db_path)
+            stored = connection.execute(
+                "SELECT prefer_us_headquarters FROM profile WHERE id = 1"
+            ).fetchone()[0]
+            connection.close()
+            self.assertEqual(0, stored)
+
+    def test_us_preference_changes_places_query(self) -> None:
+        self.assertEqual("Example Co United States headquarters", _headquarters_query("Example Co", True))
+        self.assertEqual("Example Co global headquarters", _headquarters_query("Example Co", False))
+
+    def test_us_address_requires_explicit_country(self) -> None:
+        self.assertTrue(_looks_like_us_address("New York, NY 10001, USA"))
+        self.assertTrue(_looks_like_us_address("Chicago, IL, United States"))
+        self.assertFalse(_looks_like_us_address("Chennai, Tamil Nadu 600100, India"))
+
+    @patch("urllib.request.urlopen")
+    def test_us_preference_rejects_non_us_places_result(self, urlopen) -> None:
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"candidates":[{"formatted_address":"Chennai, Tamil Nadu 600100, India"}]}'
+        )
+        urlopen.return_value = response
+        with patch("utils.get_gemini_api_key", return_value=""):
+            self.assertEqual(
+                "Unknown",
+                find_us_headquarters("Future Works", api_key="", google_maps_key="maps-key", prefer_us=True),
+            )
+
+    @patch("urllib.request.urlopen")
+    def test_global_preference_accepts_formatted_global_result(self, urlopen) -> None:
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"candidates":[{"formatted_address":"London EC1V 3AG, United Kingdom"}]}'
+        )
+        urlopen.return_value = response
+        self.assertEqual(
+            "London EC1V 3AG, United Kingdom",
+            find_us_headquarters("Example Co", api_key="", google_maps_key="maps-key", prefer_us=False),
+        )
+
+
 class SearchQualityTests(unittest.TestCase):
     def test_generic_smartrecruiters_career_pages_are_not_job_postings(self) -> None:
         self.assertFalse(is_specific_job_url("https://careers.smartrecruiters.com/QADInc/corporate-careers"))
@@ -286,6 +385,7 @@ class LifecycleSchemaTests(unittest.TestCase):
         lifecycle_columns = {
             "created_at", "tailored_at", "form_filled_at", "submitted_at",
             "confirmed_at", "application_method", "submission_evidence", "notes", "follow_up_date", "tailored_resume_text",
+            "cover_letter_path",
         }
         actual = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
         self.assertTrue(lifecycle_columns.issubset(actual))
@@ -293,6 +393,7 @@ class LifecycleSchemaTests(unittest.TestCase):
         self.assertTrue({"last_checked_at", "is_expired", "expiration_reason", "location", "work_arrangement", "employment_type", "compensation", "source"}.issubset(job_columns))
         profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(profile)")}
         self.assertIn("resume_mode", profile_columns)
+        self.assertIn("prefer_us_headquarters", profile_columns)
         self.assertEqual(1, connection.execute("PRAGMA foreign_keys").fetchone()[0])
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({"application_status_history", "saved_searches"}.issubset(tables))
