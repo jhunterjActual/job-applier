@@ -25,7 +25,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260805.1"
+APP_BUILD = "20260806.1"
 
 
 @asynccontextmanager
@@ -58,6 +58,7 @@ class ProfileUpdate(BaseModel):
     website: str
     base_resume_text: str
     resume_mode: Literal["it", "technical_executive", "general_professional", "federal", "healthcare", "education", "sales", "trades_operations", "academic_cv", "cover_letter"] = "general_professional"
+    prefer_us_headquarters: bool = True
 
 
 class ProfileSecretsUpdate(BaseModel):
@@ -129,9 +130,9 @@ def update_profile(profile: ProfileUpdate) -> dict:
     conn.execute("""
     UPDATE profile
     SET name = ?, email = ?, phone = ?, github = ?, linkedin = ?, website = ?,
-        base_resume_text = ?, resume_mode = ?, suggested_keywords = ''
+        base_resume_text = ?, resume_mode = ?, prefer_us_headquarters = ?, suggested_keywords = ''
     WHERE id = 1
-    """, (profile.name, profile.email, profile.phone, profile.github, profile.linkedin, profile.website, profile.base_resume_text, profile.resume_mode))
+    """, (profile.name, profile.email, profile.phone, profile.github, profile.linkedin, profile.website, profile.base_resume_text, profile.resume_mode, int(profile.prefer_us_headquarters)))
     conn.commit()
     conn.close()
     
@@ -539,7 +540,7 @@ def tailor_resume_endpoint(job_id: int) -> dict:
     started_at = time.monotonic()
     conn = get_db_connection()
     job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-    profile = conn.execute("SELECT base_resume_text, gemini_api_key, google_maps_api_key, resume_mode FROM profile LIMIT 1").fetchone()
+    profile = conn.execute("SELECT base_resume_text, gemini_api_key, google_maps_api_key, resume_mode, prefer_us_headquarters FROM profile LIMIT 1").fetchone()
     
     if not job:
         conn.close()
@@ -586,7 +587,14 @@ def tailor_resume_endpoint(job_id: int) -> dict:
     existing = conn.execute("SELECT id FROM applications WHERE job_id = ?", (job_id,)).fetchone()
     
     # Find headquarters
-    hq = find_us_headquarters(job["company"], api_key, google_key)
+    hq = find_us_headquarters(
+        job["company"],
+        api_key,
+        google_key,
+        prefer_us=bool(profile["prefer_us_headquarters"]),
+        job_location=job["location"] or "",
+        job_url=job["url"] or "",
+    )
     
     now = datetime.now().isoformat(timespec="seconds")
     if existing:

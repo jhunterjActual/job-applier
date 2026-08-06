@@ -30,6 +30,8 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [x] Add saved searches, duplicate detection, and on-demand expired-posting checks.
 - [x] Add optional scheduled alerts for saved searches.
 - [x] Detect job-source format drift using provider health checks, expected content/selector contracts, and rejection-rate baselines; alert the user when a provider appears incompatible instead of silently returning no results, including a safe diagnostic summary and affected provider.
+- [ ] Make Lever source diagnostics resilient and specific: use the official read-only Lever Postings JSON API as the primary job-detail source; classify missing, removed, or expired postings as stale instead of format drift; reserve format-drift alerts for successful responses with invalid schemas; retain privacy-safe rejection-category counts; and use browser scraping only when the API is unavailable.
+- [x] Add a saved profile toggle to prefer a U.S. headquarters address when an employer has multiple headquarters, incorporate it into address resolution for unemployment reporting, and reject non-U.S. Places matches from the U.S.-preferred lookup before a verified global fallback.
 - [x] Add sortable/filterable job results with status and a user-adjustable minimum match-score control.
 - [x] Enrich job results with normalized location, work arrangement, compensation, date found, and source fields.
 - [x] Add editable resume and cover-letter preview with PDF regeneration before applying.

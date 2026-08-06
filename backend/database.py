@@ -38,7 +38,8 @@ def init_db() -> None:
         linkedin TEXT,
         website TEXT,
         base_resume_text TEXT,
-        gemini_api_key TEXT
+        gemini_api_key TEXT,
+        prefer_us_headquarters INTEGER NOT NULL DEFAULT 1
     )
     """)
     
@@ -127,6 +128,7 @@ def init_db() -> None:
     _add_column_if_missing(cursor, "profile", "suggested_keywords", "TEXT DEFAULT ''")
     _add_column_if_missing(cursor, "profile", "google_maps_api_key", "TEXT DEFAULT ''")
     _add_column_if_missing(cursor, "profile", "resume_mode", "TEXT DEFAULT 'general_professional'")
+    _add_column_if_missing(cursor, "profile", "prefer_us_headquarters", "INTEGER NOT NULL DEFAULT 1")
     _add_column_if_missing(cursor, "jobs", "archived_at", "TEXT")
     _add_column_if_missing(cursor, "jobs", "archived_from_status", "TEXT")
     _add_column_if_missing(cursor, "jobs", "last_checked_at", "TEXT")

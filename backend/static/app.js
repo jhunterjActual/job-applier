@@ -33,6 +33,7 @@ const pApiKey = document.getElementById("p-apikey");
 const pGoogleApiKey = document.getElementById("p-google-apikey");
 const pResume = document.getElementById("p-resume");
 const pResumeMode = document.getElementById("p-resume-mode");
+const pPreferUsHeadquarters = document.getElementById("p-prefer-us-headquarters");
 const resumeFileUpload = document.getElementById("resume-file-upload");
 const toggleApiVisibilityBtn = document.getElementById("toggle-api-visibility");
 const toggleGoogleApiVisibilityBtn = document.getElementById("toggle-google-api-visibility");
@@ -545,6 +546,7 @@ async function loadProfile() {
             pGoogleApiKey.placeholder = googleMapsKeyConfigured ? "Saved — enter a new key to replace" : "Enter optional Google Maps API key";
             pResume.value = profile.base_resume_text || "";
             pResumeMode.value = profile.resume_mode || "general_professional";
+            pPreferUsHeadquarters.checked = profile.prefer_us_headquarters !== 0;
             
             userDisplayName.innerText = profile.name || "Candidate";
             updateApiKeyStatus(geminiKeyConfigured);
@@ -575,7 +577,8 @@ async function saveProfile(e) {
         linkedin: pLinkedin.value.trim(),
         website: pWebsite.value.trim(),
         base_resume_text: pResume.value.trim(),
-        resume_mode: pResumeMode.value
+        resume_mode: pResumeMode.value,
+        prefer_us_headquarters: pPreferUsHeadquarters.checked
     };
     
     try {

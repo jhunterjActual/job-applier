@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260805-1">
+    <link rel="stylesheet" href="/static/index.css?v=20260806-1">
 </head>
 <body>
     <div class="app-container">
@@ -191,6 +191,13 @@
                                     </div>
                                     <small class="form-help">Uses the Google Places API for headquarters street address resolution if provided.</small>
                                 </div>
+                                <div class="form-group full-width">
+                                    <label>
+                                        <input type="checkbox" id="p-prefer-us-headquarters" checked>
+                                        Prefer a U.S. headquarters address when an employer has multiple headquarters
+                                    </label>
+                                    <small class="form-help">Useful when documenting U.S. unemployment work-search activity. Unverified addresses are shown as Unknown.</small>
+                                </div>
                                 <div class="form-actions full-width">
                                     <button type="submit" class="btn btn-primary" id="save-profile-btn">
                                         <i class="fa-solid fa-floppy-disk"></i> Save Settings
@@ -350,7 +357,7 @@
                                         <th>Company</th>
                                         <th>Position Title</th>
                                         <th>Application Date</th>
-                                        <th>U.S. Headquarters</th>
+                                        <th>Headquarters Address</th>
                                         <th>Status</th>
                                         <th>Files</th>
                                     </tr>
@@ -566,6 +573,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260805-1"></script>
+    <script src="/static/app.js?v=20260806-1"></script>
 </body>
 </html>

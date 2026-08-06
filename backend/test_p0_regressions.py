@@ -27,7 +27,7 @@ from tailor import (
     finalize_cover_letter,
     tailor_resume_and_cover_letter,
 )
-from utils import markdown_to_html
+from utils import _headquarters_query, _looks_like_us_address, find_us_headquarters, markdown_to_html
 
 
 class ApplicationMaterialsSafetyTests(unittest.TestCase):
@@ -169,13 +169,14 @@ class FrontendStartupTests(unittest.TestCase):
             "lifecycle-form", "undo-lifecycle-btn", "save-materials-btn",
             "download-resume-btn", "download-cover-letter-btn",
             "saved-search-select", "p-resume-mode",
+            "p-prefer-us-headquarters",
             "lifecycle-applied-calendar-btn", "saved-search-frequency", "provider-alerts",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=", html_source)
-        self.assertIn("index.css?v=", html_source)
+        self.assertIn("app.js?v=20260806-1", html_source)
+        self.assertIn("index.css?v=20260806-1", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -183,7 +184,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260805.1", source)
+                self.assertIn("20260806.1", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -260,6 +261,75 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn('result.pop("google_maps_api_key"', app_source)
 
 
+class HeadquartersPreferenceTests(unittest.TestCase):
+    def test_profile_save_persists_disabled_us_preference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "profile.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript("""
+                CREATE TABLE profile (
+                    id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT,
+                    github TEXT, linkedin TEXT, website TEXT, base_resume_text TEXT,
+                    resume_mode TEXT, prefer_us_headquarters INTEGER,
+                    suggested_keywords TEXT
+                );
+                INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 1, '');
+            """)
+            connection.close()
+
+            def open_test_database():
+                return sqlite3.connect(db_path)
+
+            profile = app_module.ProfileUpdate(
+                name="Candidate", email="candidate@example.test", phone="",
+                github="", linkedin="", website="", base_resume_text="Resume",
+                resume_mode="general_professional", prefer_us_headquarters=False,
+            )
+            with patch.object(app_module, "get_db_connection", side_effect=open_test_database):
+                app_module.update_profile(profile)
+
+            connection = sqlite3.connect(db_path)
+            stored = connection.execute(
+                "SELECT prefer_us_headquarters FROM profile WHERE id = 1"
+            ).fetchone()[0]
+            connection.close()
+            self.assertEqual(0, stored)
+
+    def test_us_preference_changes_places_query(self) -> None:
+        self.assertEqual("Example Co United States headquarters", _headquarters_query("Example Co", True))
+        self.assertEqual("Example Co global headquarters", _headquarters_query("Example Co", False))
+
+    def test_us_address_requires_explicit_country(self) -> None:
+        self.assertTrue(_looks_like_us_address("New York, NY 10001, USA"))
+        self.assertTrue(_looks_like_us_address("Chicago, IL, United States"))
+        self.assertFalse(_looks_like_us_address("Chennai, Tamil Nadu 600100, India"))
+
+    @patch("urllib.request.urlopen")
+    def test_us_preference_rejects_non_us_places_result(self, urlopen) -> None:
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"candidates":[{"formatted_address":"Chennai, Tamil Nadu 600100, India"}]}'
+        )
+        urlopen.return_value = response
+        with patch("utils.get_gemini_api_key", return_value=""):
+            self.assertEqual(
+                "Unknown",
+                find_us_headquarters("Future Works", api_key="", google_maps_key="maps-key", prefer_us=True),
+            )
+
+    @patch("urllib.request.urlopen")
+    def test_global_preference_accepts_formatted_global_result(self, urlopen) -> None:
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"candidates":[{"formatted_address":"London EC1V 3AG, United Kingdom"}]}'
+        )
+        urlopen.return_value = response
+        self.assertEqual(
+            "London EC1V 3AG, United Kingdom",
+            find_us_headquarters("Example Co", api_key="", google_maps_key="maps-key", prefer_us=False),
+        )
+
+
 class SearchQualityTests(unittest.TestCase):
     def test_generic_smartrecruiters_career_pages_are_not_job_postings(self) -> None:
         self.assertFalse(is_specific_job_url("https://careers.smartrecruiters.com/QADInc/corporate-careers"))
@@ -323,6 +393,7 @@ class LifecycleSchemaTests(unittest.TestCase):
         self.assertTrue({"last_checked_at", "is_expired", "expiration_reason", "location", "work_arrangement", "employment_type", "compensation", "source"}.issubset(job_columns))
         profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(profile)")}
         self.assertIn("resume_mode", profile_columns)
+        self.assertIn("prefer_us_headquarters", profile_columns)
         self.assertEqual(1, connection.execute("PRAGMA foreign_keys").fetchone()[0])
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({"application_status_history", "saved_searches"}.issubset(tables))
