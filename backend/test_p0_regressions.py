@@ -188,8 +188,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260807-3", html_source)
-        self.assertIn("index.css?v=20260807-3", html_source)
+        self.assertIn("app.js?v=20260807-4", html_source)
+        self.assertIn("index.css?v=20260807-4", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -197,7 +197,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260807.3", source)
+                self.assertIn("20260807.4", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -290,6 +290,11 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn("/api/jobs/import", script_source)
         self.assertIn('job.match_score === null', script_source)
         self.assertIn('"Unscored"', script_source)
+
+    def test_expected_search_limits_render_as_informational_notes(self) -> None:
+        script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('["stale_postings", "partial_results"]', script_source)
+        self.assertIn('needsAttention ? "Some job sources may need attention" : "Search notes"', script_source)
 
 
 class ProfileSecretPresenceTests(unittest.TestCase):
@@ -707,6 +712,7 @@ class SearchQualityTests(unittest.TestCase):
     class FakeHttpResponse:
         def __init__(self, payload: bytes):
             self.payload = payload
+            self.read_limit = None
 
         def __enter__(self):
             return self
@@ -714,8 +720,28 @@ class SearchQualityTests(unittest.TestCase):
         def __exit__(self, *_args):
             return False
 
-        def read(self, _limit):
+        def read(self, limit):
+            self.read_limit = limit
             return self.payload
+
+    @staticmethod
+    def provider_diagnostics(provider="lever"):
+        return {
+            provider: {
+                "raw_candidates": 0,
+                "valid_discovered": 0,
+                "new_candidates": 0,
+                "accepted": 0,
+                "errors": [],
+                "candidate_budget_exhausted": False,
+                "partial_results": {
+                    "oversized_responses": 0,
+                    "candidate_limit_hits": 0,
+                    "timeouts": 0,
+                },
+                "rejection_reasons": {},
+            }
+        }
 
     def test_generic_smartrecruiters_career_pages_are_not_job_postings(self) -> None:
         self.assertFalse(is_specific_job_url("https://careers.smartrecruiters.com/QADInc/corporate-careers"))
@@ -724,6 +750,12 @@ class SearchQualityTests(unittest.TestCase):
     def test_tracking_variants_share_one_canonical_url(self) -> None:
         base = "https://jobs.lever.co/example/abc-123"
         self.assertEqual(base, canonicalize_job_url(base + "/?source=linkedin#apply"))
+
+    def test_ashby_application_route_canonicalizes_to_the_posting(self) -> None:
+        posting = "https://jobs.ashbyhq.com/change/c73f61f9-e17d-4d29-bc58-40702ef50ef2"
+
+        self.assertEqual(posting, canonicalize_job_url(f"{posting}/application"))
+        self.assertEqual(posting, canonicalize_job_url(f"{posting}/application/?utm_source=email"))
 
     def test_unknown_site_keeps_functional_query_but_removes_tracking(self) -> None:
         self.assertEqual(
@@ -988,6 +1020,95 @@ class SearchQualityTests(unittest.TestCase):
         alerts = provider_alerts_from_health(health)
 
         self.assertEqual(["stale_postings"], [alert["code"] for alert in alerts])
+
+    def test_yahoo_search_bounds_response_bytes_and_reports_partial_results(self) -> None:
+        posting_url = "https://jobs.lever.co/acme/posting-123"
+        response = self.FakeHttpResponse(
+            f'<a href="{posting_url}">Role</a>'.encode("utf-8")
+            + b"x" * searcher_module.MAX_SEARCH_RESPONSE_BYTES
+        )
+        diagnostics = self.provider_diagnostics()
+        with (
+            patch.object(searcher_module, "PROVIDER_DOMAINS", {"lever": "lever.co"}),
+            patch.object(searcher_module.urllib.request, "urlopen", return_value=response) as urlopen,
+        ):
+            results = searcher_module.search_yahoo_jobs("data leader", diagnostics=diagnostics)
+
+        self.assertEqual([posting_url], [result["url"] for result in results])
+        self.assertEqual(searcher_module.MAX_SEARCH_RESPONSE_BYTES + 1, response.read_limit)
+        self.assertEqual(searcher_module.SEARCH_HTTP_TIMEOUT_SECONDS, urlopen.call_args.kwargs["timeout"])
+        self.assertEqual(1, diagnostics["lever"]["partial_results"]["oversized_responses"])
+
+    def test_yahoo_search_caps_candidates_per_provider(self) -> None:
+        links = "".join(
+            f'<a href="https://jobs.lever.co/acme/posting-{index}">Role</a>'
+            for index in range(searcher_module.MAX_PROVIDER_CANDIDATES + 3)
+        ).encode("utf-8")
+        diagnostics = self.provider_diagnostics()
+        with (
+            patch.object(searcher_module, "PROVIDER_DOMAINS", {"lever": "lever.co"}),
+            patch.object(
+                searcher_module.urllib.request,
+                "urlopen",
+                return_value=self.FakeHttpResponse(links),
+            ),
+        ):
+            results = searcher_module.search_yahoo_jobs("data leader", diagnostics=diagnostics)
+
+        self.assertEqual(searcher_module.MAX_PROVIDER_CANDIDATES, len(results))
+        self.assertEqual(1, diagnostics["lever"]["partial_results"]["candidate_limit_hits"])
+
+    def test_provider_candidate_cap_applies_across_search_queries(self) -> None:
+        results = []
+        seen_urls = set()
+        counts = {"lever": 0}
+        health = self.provider_diagnostics()
+
+        appended = [
+            searcher_module._append_candidate_with_budget(
+                {"url": f"https://jobs.lever.co/acme/posting-{index}"},
+                results,
+                seen_urls,
+                counts,
+                health,
+            )
+            for index in range(searcher_module.MAX_PROVIDER_CANDIDATES + 2)
+        ]
+
+        self.assertEqual(searcher_module.MAX_PROVIDER_CANDIDATES, sum(appended))
+        self.assertEqual(searcher_module.MAX_PROVIDER_CANDIDATES, len(results))
+        self.assertTrue(health["lever"]["candidate_budget_exhausted"])
+
+    def test_yahoo_timeout_is_a_partial_result_instead_of_an_unbounded_wait(self) -> None:
+        diagnostics = self.provider_diagnostics()
+        with (
+            patch.object(searcher_module, "PROVIDER_DOMAINS", {"lever": "lever.co"}),
+            patch.object(searcher_module.urllib.request, "urlopen", side_effect=TimeoutError),
+        ):
+            results = searcher_module.search_yahoo_jobs("data leader", diagnostics=diagnostics)
+
+        self.assertEqual([], results)
+        self.assertEqual(1, diagnostics["lever"]["partial_results"]["timeouts"])
+        self.assertEqual([], diagnostics["lever"]["errors"])
+
+    def test_provider_budget_alert_explains_partial_results(self) -> None:
+        health = self.provider_diagnostics()
+        health["lever"]["candidate_budget_exhausted"] = True
+        health["lever"]["partial_results"]["oversized_responses"] = 1
+
+        alerts = provider_alerts_from_health(health)
+
+        self.assertEqual(["partial_results"], [alert["code"] for alert in alerts])
+        self.assertIn("1 MiB", alerts[0]["message"])
+        self.assertIn("25-posting", alerts[0]["message"])
+
+    def test_job_description_is_bounded_at_the_matching_storage_boundary(self) -> None:
+        original = {"title": "Role", "description": "x" * (searcher_module.MAX_JOB_DESCRIPTION_CHARS + 100)}
+
+        bounded = searcher_module._bounded_job_details(original)
+
+        self.assertEqual(searcher_module.MAX_JOB_DESCRIPTION_CHARS, len(bounded["description"]))
+        self.assertGreater(len(original["description"]), len(bounded["description"]))
 
     def test_generic_extraction_prefers_structured_job_data_in_child_frame(self) -> None:
         class Scope:
