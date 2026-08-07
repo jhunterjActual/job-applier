@@ -5,14 +5,21 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal, Optional
 from datetime import date, datetime, timedelta
 
 import config
 from database import get_db_connection
-from tailor import apply_resume_section_template, finalize_cover_letter, tailor_resume_and_cover_letter
-from searcher import run_job_search_and_matching, scrape_job_details
+from tailor import analyze_job_match, apply_resume_section_template, finalize_cover_letter, tailor_resume_and_cover_letter
+from searcher import (
+    MAX_JOB_DESCRIPTION_CHARS,
+    canonicalize_job_url,
+    provider_for_url,
+    run_job_search_and_matching,
+    scrape_job_details,
+    validate_public_http_url,
+)
 from utils import generate_resume_pdf, find_us_headquarters
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
@@ -25,7 +32,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260806.2"
+APP_BUILD = "20260807.1"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -122,6 +129,21 @@ class SearchRequest(BaseModel):
     saved_search_name: Optional[str] = None
     saved_search_id: Optional[int] = None
     schedule_frequency: Literal["none", "daily", "weekly"] = "none"
+
+
+class ManualJobPreviewRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+
+
+class ManualJobSaveRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+    title: str = Field(min_length=2, max_length=180)
+    company: str = Field(min_length=2, max_length=180)
+    description: str = Field(min_length=20, max_length=MAX_JOB_DESCRIPTION_CHARS)
+    location: str = Field(default="", max_length=240)
+    work_arrangement: Literal["", "remote", "hybrid", "on_site"] = ""
+    employment_type: Literal["", "full_time", "part_time", "contract", "temporary", "internship"] = ""
+    compensation: str = Field(default="", max_length=160)
 
 class CleanupRequest(BaseModel):
     action: Literal["archive", "delete", "restore"]
@@ -310,6 +332,160 @@ def get_jobs(include_archived: bool = False) -> list[dict]:
     """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+@app.post("/api/jobs/import/preview")
+def preview_manual_job(req: ManualJobPreviewRequest) -> dict:
+    """Validate a public posting URL and extract editable details without saving it."""
+    canonical_url = canonicalize_job_url(req.url)
+    is_public, reason = validate_public_http_url(canonical_url)
+    if not is_public:
+        raise HTTPException(status_code=422, detail=reason)
+
+    conn = get_db_connection()
+    existing = conn.execute(
+        "SELECT id, title, company, status FROM jobs WHERE url = ?",
+        (canonical_url,),
+    ).fetchone()
+    conn.close()
+    if existing:
+        return {
+            "success": True,
+            "duplicate": True,
+            "existing_job": dict(existing),
+            "job": {"url": canonical_url},
+        }
+
+    details = scrape_job_details(canonical_url, allow_partial=True) or {}
+    resolved_url = canonicalize_job_url(details.get("url") or canonical_url)
+    if resolved_url != canonical_url:
+        conn = get_db_connection()
+        existing = conn.execute(
+            "SELECT id, title, company, status FROM jobs WHERE url = ?",
+            (resolved_url,),
+        ).fetchone()
+        conn.close()
+        if existing:
+            return {
+                "success": True,
+                "duplicate": True,
+                "existing_job": dict(existing),
+                "job": {"url": resolved_url},
+            }
+
+    provider = provider_for_url(resolved_url)
+    source = provider if provider != "unknown" else (urlsplit(resolved_url).hostname or "manual")
+    job = {
+        "url": resolved_url,
+        "title": str(details.get("title") or "")[:180],
+        "company": str(details.get("company") or "")[:180],
+        "description": str(details.get("description") or "")[:MAX_JOB_DESCRIPTION_CHARS],
+        "location": str(details.get("location") or "")[:240],
+        "work_arrangement": details.get("work_arrangement") or "",
+        "employment_type": details.get("employment_type") or "",
+        "compensation": str(details.get("compensation") or "")[:160],
+        "source": source,
+    }
+    extraction_succeeded = all(job.get(key) for key in ("title", "company", "description"))
+    return {
+        "success": True,
+        "duplicate": False,
+        "extraction_succeeded": extraction_succeeded,
+        "message": (
+            "Review the extracted details before saving."
+            if extraction_succeeded else
+            "The page could not be fully parsed. Complete the required fields before saving."
+        ),
+        "job": job,
+    }
+
+
+@app.post("/api/jobs/import")
+def save_manual_job(req: ManualJobSaveRequest) -> dict:
+    """Save one reviewed posting and score it when the configured AI is available."""
+    canonical_url = canonicalize_job_url(req.url)
+    is_public, reason = validate_public_http_url(canonical_url)
+    if not is_public:
+        raise HTTPException(status_code=422, detail=reason)
+
+    title = " ".join(req.title.split())
+    company = " ".join(req.company.split())
+    description = req.description.strip()
+    location = " ".join(req.location.split())
+    compensation = " ".join(req.compensation.split())
+    provider = provider_for_url(canonical_url)
+    source = provider if provider != "unknown" else (urlsplit(canonical_url).hostname or "manual")
+    if len(title) < 2 or len(company) < 2 or len(description) < 20:
+        raise HTTPException(
+            status_code=422,
+            detail="Company and title are required, and the description must contain at least 20 characters.",
+        )
+
+    conn = get_db_connection()
+    try:
+        profile = conn.execute(
+            "SELECT base_resume_text, gemini_api_key FROM profile LIMIT 1"
+        ).fetchone()
+        match_score = None
+        match_analysis = "Manual import saved without AI match analysis."
+        if profile and profile["base_resume_text"] and profile["gemini_api_key"]:
+            try:
+                match = analyze_job_match(
+                    profile["base_resume_text"], title, company, description, profile["gemini_api_key"]
+                )
+                if match.get("success"):
+                    match_score = max(0, min(100, int(match["match_score"])))
+                    match_analysis = str(match.get("match_analysis") or "Matched successfully.")
+            except (AttributeError, KeyError, TypeError, ValueError):
+                match_score = None
+
+        # AI analysis may make a network call, so do it before taking the write
+        # lock. The duplicate check stays inside the transaction to close the
+        # race between concurrent imports of the same canonical URL.
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT id, title, company, status FROM jobs WHERE url = ?",
+            (canonical_url,),
+        ).fetchone()
+        if existing:
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"This posting is already saved as job #{existing['id']}.",
+            )
+
+        now = datetime.now().isoformat(timespec="seconds")
+        cursor = conn.execute("""
+            INSERT INTO jobs (
+                title, company, description, url, match_score, match_analysis,
+                date_found, status, location, work_arrangement, employment_type,
+                compensation, source, last_checked_at, is_expired
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'matched', ?, ?, ?, ?, ?, ?, 0)
+        """, (
+            title, company, description, canonical_url, match_score, match_analysis,
+            date.today().isoformat(), location, req.work_arrangement,
+            req.employment_type, compensation, source, now,
+        ))
+        job_id = cursor.lastrowid
+        conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "match_score": match_score,
+        "message": (
+            "Job imported and match analysis completed."
+            if match_score is not None else
+            "Job imported. Match analysis was unavailable, so it is shown as unscored."
+        ),
+    }
 
 
 @app.patch("/api/jobs/{job_id}/lifecycle")
