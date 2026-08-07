@@ -4,6 +4,7 @@ import json
 import re
 import socket
 import urllib.parse
+import urllib.error
 import urllib.request
 from playwright.sync_api import sync_playwright
 from google import genai
@@ -14,6 +15,7 @@ from datetime import datetime
 
 MIN_MATCH_SCORE = 40
 MAX_JOB_DESCRIPTION_CHARS = 50_000
+MAX_LEVER_API_BYTES = 2 * 1024 * 1024
 TRACKING_QUERY_KEYS = {
     "fbclid", "gclid", "mc_cid", "mc_eid", "ref", "referrer", "source",
 }
@@ -33,6 +35,10 @@ INVALID_JOB_TEXT = (
     "job is closed",
     "page not found",
     "access denied",
+)
+ACCESS_CHALLENGE_TEXT = (
+    "additional verification required", "are you a human", "captcha",
+    "just a moment", "verify you are human", "unusual traffic",
 )
 
 
@@ -69,7 +75,7 @@ def provider_for_url(url: str) -> str:
     host = (urllib.parse.urlparse(url).hostname or "").lower()
     if host == "greenhouse.io" or host.endswith(".greenhouse.io"):
         return "greenhouse"
-    if host == "jobs.lever.co":
+    if host in {"jobs.lever.co", "jobs.eu.lever.co"}:
         return "lever"
     if host == "jobs.ashbyhq.com":
         return "ashby"
@@ -280,6 +286,103 @@ def _structured_job_metadata(posting: dict) -> dict:
     }
 
 
+def _job_fetch_outcome(status: str, details: dict | None = None, reason: str = "") -> dict:
+    return {"status": status, "details": details or {}, "reason": reason}
+
+
+def _lever_company_name(site: str) -> str:
+    decoded = urllib.parse.unquote(site).replace("-", " ").replace("_", " ")
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", decoded)
+    return " ".join(spaced.split()).title()
+
+
+def _lever_compensation(posting: dict) -> str:
+    salary = posting.get("salaryRange")
+    if isinstance(salary, dict):
+        minimum = _format_salary_number(salary.get("min"))
+        maximum = _format_salary_number(salary.get("max"))
+        amount = f"{minimum}–{maximum}" if minimum and maximum and minimum != maximum else minimum or maximum
+        currency = _plain_text(salary.get("currency"))
+        interval = _plain_text(salary.get("interval")).lower()
+        if amount:
+            suffix = f"per {interval}" if interval else ""
+            return " ".join(value for value in (currency, amount, suffix) if value)[:160]
+    return _plain_text(posting.get("salaryDescriptionPlain"))[:160]
+
+
+def _lever_posting_from_api(url: str) -> dict:
+    """Fetch one published Lever posting and classify failures before browser fallback."""
+    parsed = urllib.parse.urlsplit(url)
+    segments = [urllib.parse.unquote(segment) for segment in parsed.path.split("/") if segment]
+    if len(segments) != 2:
+        return _job_fetch_outcome("format_drift", reason="Lever posting URL did not contain a site and posting ID.")
+    site, posting_id = segments
+    api_host = "api.eu.lever.co" if parsed.hostname == "jobs.eu.lever.co" else "api.lever.co"
+    api_url = f"https://{api_host}/v0/postings/{urllib.parse.quote(site, safe='')}/{urllib.parse.quote(posting_id, safe='')}"
+    request = urllib.request.Request(api_url, headers={"Accept": "application/json", "User-Agent": "JobApplier/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            payload = response.read(MAX_LEVER_API_BYTES + 1)
+            if len(payload) > MAX_LEVER_API_BYTES:
+                return _job_fetch_outcome("provider_error", reason="Lever API response exceeded the safe size limit.")
+    except urllib.error.HTTPError as exc:
+        if exc.code in {404, 410}:
+            return _job_fetch_outcome("stale", reason="Lever reports that this posting is no longer published.")
+        return _job_fetch_outcome("api_unavailable", reason=f"Lever API returned HTTP {exc.code}.")
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        return _job_fetch_outcome("api_unavailable", reason=f"Lever API was unavailable: {type(exc).__name__}.")
+
+    try:
+        posting = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _job_fetch_outcome("format_drift", reason="Lever API returned an invalid JSON document.")
+    if not isinstance(posting, dict):
+        return _job_fetch_outcome("format_drift", reason="Lever API returned an unexpected document type.")
+
+    categories = posting.get("categories")
+    if not isinstance(categories, dict):
+        categories = {}
+    title = _plain_text(posting.get("text"))
+    description = _plain_text(posting.get("descriptionPlain")) or _plain_text(posting.get("description"))
+    sections = []
+    for section in posting.get("lists") or []:
+        if not isinstance(section, dict):
+            continue
+        heading = _plain_text(section.get("text"))
+        content = _plain_text(section.get("content"))
+        if heading or content:
+            sections.append("\n".join(value for value in (heading, content) if value))
+    additional = _plain_text(posting.get("additionalPlain")) or _plain_text(posting.get("additional"))
+    description = "\n\n".join(value for value in (description, *sections, additional) if value)
+
+    locations = categories.get("allLocations") or categories.get("location") or []
+    if not isinstance(locations, list):
+        locations = [locations]
+    normalized_locations = []
+    for location in locations:
+        location_text = _plain_text(location)
+        if location_text and location_text.casefold() not in {item.casefold() for item in normalized_locations}:
+            normalized_locations.append(location_text)
+
+    workplace = _plain_text(posting.get("workplaceType")).lower()
+    arrangement = {"remote": "remote", "hybrid": "hybrid", "on-site": "on_site"}.get(workplace, "")
+    commitment = _metadata_from_text(_plain_text(categories.get("commitment"))).get("employment_type", "")
+    details = {
+        "title": title[:180],
+        "company": _lever_company_name(site)[:180],
+        "description": description[:MAX_JOB_DESCRIPTION_CHARS],
+        "url": url,
+        "location": "; ".join(normalized_locations)[:240],
+        "work_arrangement": arrangement,
+        "employment_type": commitment,
+        "compensation": _lever_compensation(posting),
+        "source": "lever",
+    }
+    if not is_useful_job_details(details):
+        return _job_fetch_outcome("format_drift", reason="Lever API response omitted required posting fields.")
+    return _job_fetch_outcome("ok", details=details)
+
+
 def _largest_text(page, selectors: str) -> str:
     """Return the largest non-empty matching text block, avoiding UI shells."""
     candidates = page.query_selector_all(selectors)
@@ -294,9 +397,36 @@ def _largest_text(page, selectors: str) -> str:
     return max(texts, key=len, default="")
 
 
+def _select_job_content_scope(page) -> tuple[object, dict, bool]:
+    """Prefer readable job data in a child frame while retaining the main page fallback."""
+    scope = page
+    posting = _job_posting_json_ld(page)
+    embedded_frames = [frame for frame in page.frames if frame != page.main_frame]
+    has_job_frame = any(
+        re.search(r"(?:^|/)(?:jobs?|careers?)(?:/|$)", urllib.parse.urlsplit(frame.url).path, re.I)
+        for frame in embedded_frames if frame.url
+    )
+    best_length = len(_largest_text(page, "[class*='job-description'], [id*='job-description'], main, article"))
+    for frame in embedded_frames:
+        try:
+            frame_posting = _job_posting_json_ld(frame)
+            frame_text = _largest_text(
+                frame, "[class*='job-description'], [id*='job-description'], main, article, body"
+            )
+            if frame_posting or len(frame_text) > best_length:
+                scope = frame
+                posting = frame_posting
+                best_length = len(frame_text)
+            if frame_posting:
+                break
+        except Exception:
+            continue
+    return scope, posting, has_job_frame
+
+
 def _metadata_from_text(text: str) -> dict:
     compact = " ".join((text or "").split())
-    lowered = compact.lower()
+    lowered = re.sub(r"[-_]", " ", compact.lower())
     work_arrangement = "remote" if re.search(r"\bremote\b", lowered) else "hybrid" if re.search(r"\bhybrid\b", lowered) else "on_site" if re.search(r"\b(on[- ]site|in[- ]office)\b", lowered) else ""
     employment_type = next((label for label in ("full time", "part time", "contract", "temporary", "internship") if label in lowered), "")
     compensation_match = re.search(r"(?:USD\s*)?\$[\d,]+(?:\.\d+)?(?:\s*[kK])?\s*(?:[-–—]|to)\s*(?:USD\s*)?\$?[\d,]+(?:\.\d+)?(?:\s*[kK])?(?:\s*(?:per|/)\s*(?:year|hour|yr|hr))?", compact)
@@ -311,24 +441,45 @@ def provider_alerts_from_health(provider_health: dict) -> list[dict]:
     """Convert abnormal provider outcomes into safe user-facing diagnostics."""
     alerts = []
     for provider, health in provider_health.items():
-        attempted = health["new_candidates"]
-        if health["raw_candidates"] >= 3 and health["valid_discovered"] == 0:
+        attempted = health.get("new_candidates", 0)
+        accepted = health.get("accepted", 0)
+        reasons = health.get("rejection_reasons", {})
+        if health.get("raw_candidates", 0) >= 3 and health.get("valid_discovered", 0) == 0:
             alerts.append({
                 "provider": provider,
                 "code": "url_format_drift",
                 "message": f"{provider.title()} search results were found, but none matched the expected job URL format.",
             })
-        elif attempted >= 2 and health["accepted"] == 0:
+        elif reasons.get("format_drift", 0):
             alerts.append({
                 "provider": provider,
                 "code": "content_format_drift",
-                "message": f"{provider.title()} returned {attempted} new candidate postings, but none matched the expected page format.",
+                "message": f"{provider.title()} returned {reasons['format_drift']} posting response(s) with an unexpected data format.",
             })
-        elif health["errors"]:
+        elif reasons.get("access_challenge", 0) or reasons.get("embedded_content", 0):
+            count = reasons.get("access_challenge", 0) + reasons.get("embedded_content", 0)
+            alerts.append({
+                "provider": provider,
+                "code": "access_challenge",
+                "message": f"{provider.title()} prevented automated reading of {count} posting(s); those results were skipped.",
+            })
+        elif provider != "lever" and attempted >= 2 and accepted == 0:
+            alerts.append({
+                "provider": provider,
+                "code": "content_format_drift",
+                "message": f"{provider.title()} returned {attempted} new candidate postings, but none exposed complete job details.",
+            })
+        elif health.get("errors") or reasons.get("provider_error", 0):
             alerts.append({
                 "provider": provider,
                 "code": "provider_error",
                 "message": f"{provider.title()} search encountered an error and may have incomplete results.",
+            })
+        if reasons.get("stale", 0):
+            alerts.append({
+                "provider": provider,
+                "code": "stale_postings",
+                "message": f"{provider.title()} skipped {reasons['stale']} posting(s) that are no longer published.",
             })
     return alerts
 
@@ -367,7 +518,7 @@ def is_specific_job_url(url: str) -> bool:
             # Greenhouse specific postings must contain 'jobs' in segments and have at least 3 segments (e.g., /company/jobs/id)
             return "jobs" in segments and len(segments) >= 3
             
-        elif host == "jobs.lever.co":
+        elif host in {"jobs.lever.co", "jobs.eu.lever.co"}:
             # Lever specific postings must have exactly 2 segments (e.g., /company/job-uuid)
             if len(segments) == 2:
                 # Avoid standard routing endpoints if any
@@ -433,7 +584,7 @@ def search_yahoo_jobs(keywords: str, location: str = "", diagnostics: dict | Non
                             decoded = urllib.parse.unquote(match.group(1))
                     
                     # Check for direct Lever, Greenhouse, Ashby, or SmartRecruiters job posting boards
-                    if any(d in decoded for d in ["boards.greenhouse.io", "job-boards.greenhouse.io", "jobs.lever.co", "ashbyhq.com", "smartrecruiters.com"]):
+                    if any(d in decoded for d in ["boards.greenhouse.io", "job-boards.greenhouse.io", "jobs.lever.co", "jobs.eu.lever.co", "ashbyhq.com", "smartrecruiters.com"]):
                         if "yahoo.com" not in decoded and "/embed/" not in decoded:
                             if diagnostics is not None:
                                 diagnostics[provider]["raw_candidates"] += 1
@@ -510,7 +661,13 @@ def extract_search_keywords_from_resume(resume_text: str, api_key: str = None) -
         print(f"Error extracting keywords from resume: {e}")
         return ["Software Engineer"]
 
-def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
+def _reject_job_fetch(diagnostic: dict | None, status: str, reason: str) -> dict:
+    if diagnostic is not None:
+        diagnostic.update({"status": status, "reason": reason})
+    return {}
+
+
+def _scrape_job_details_browser(url: str, allow_partial: bool = False, diagnostic: dict | None = None) -> dict:
     """
     Launches a headless browser via Playwright and scrapes the job details
     (title, company name, description, and link) from the target job board.
@@ -523,9 +680,9 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
               or an empty dictionary if the posting is closed or invalid.
     """
     url = canonicalize_job_url(url)
-    is_public, _ = validate_public_http_url(url)
+    is_public, reason = validate_public_http_url(url)
     if not is_public:
-        return {}
+        return _reject_job_fetch(diagnostic, "unsafe_url", reason)
     provider = provider_for_url(url)
     hostname = (urllib.parse.urlsplit(url).hostname or "").removeprefix("www.")
     details = {
@@ -551,9 +708,13 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
         try:
             response = page.goto(url, timeout=20000, wait_until="domcontentloaded")
             if response and response.status >= 400:
-                return {}
+                if response.status in {404, 410}:
+                    return _reject_job_fetch(diagnostic, "stale", f"Posting returned HTTP {response.status}.")
+                if response.status in {401, 403, 429}:
+                    return _reject_job_fetch(diagnostic, "access_challenge", f"Posting returned HTTP {response.status}.")
+                return _reject_job_fetch(diagnostic, "provider_error", f"Posting returned HTTP {response.status}.")
             if not is_public_http_url(page.url):
-                return {}
+                return _reject_job_fetch(diagnostic, "unsafe_url", "Posting redirected to a non-public destination.")
             final_url = canonicalize_job_url(page.url)
             if final_url:
                 details["url"] = final_url
@@ -565,13 +726,20 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
                 pass
                 
             page_title = page.title().lower()
-            if "couldn't find" in page_title or "not found" in page_title or "error" in page_title:
-                return {}
+            body_preview = ""
+            try:
+                body_preview = page.inner_text("body")[:4000].lower()
+            except Exception:
+                pass
+            if any(marker in f"{page_title}\n{body_preview}" for marker in ACCESS_CHALLENGE_TEXT):
+                return _reject_job_fetch(diagnostic, "access_challenge", "The site presented an automated-access challenge.")
+            if any(marker in page_title for marker in ("couldn't find", "not found", "no longer available")):
+                return _reject_job_fetch(diagnostic, "stale", "The posting page indicates that the job is no longer available.")
                 
             if "lever.co" in url:
                 title_elem = page.query_selector(".posting-header h2, h2")
                 if not title_elem:
-                    return {} # Discard if no job title element is found
+                    return _reject_job_fetch(diagnostic, "format_drift", "Lever browser fallback did not expose a job title.")
                     
                 company_logo = page.query_selector(".main-header-logo img")
                 company_name = ""
@@ -596,7 +764,7 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
             elif "greenhouse.io" in url:
                 title_elem = page.query_selector("h1.app-title, h1")
                 if not title_elem:
-                    return {} # Discard if no job title element is found
+                    return _reject_job_fetch(diagnostic, "format_drift", "Greenhouse page did not expose a job title.")
                     
                 company_elem = page.query_selector("span.company-name")
                 company_name = ""
@@ -622,7 +790,7 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
             elif "ashbyhq.com" in url:
                 title_elem = page.query_selector("h1")
                 if not title_elem:
-                    return {} # Discard if no job title element is found
+                    return _reject_job_fetch(diagnostic, "format_drift", "Ashby page did not expose a job title.")
                     
                 parsed_url = urllib.parse.urlparse(url)
                 url_path = parsed_url.path.strip("/")
@@ -652,12 +820,12 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
                 title_candidates = page.query_selector_all("h1")
                 title_text = next((element.inner_text().strip() for element in title_candidates if element.inner_text().strip() and not any(marker in element.inner_text().lower() for marker in INVALID_JOB_TEXT)), "")
                 if not title_text:
-                    return {}
+                    return _reject_job_fetch(diagnostic, "format_drift", "SmartRecruiters page did not expose a job title.")
 
                 parsed_url = urllib.parse.urlparse(url)
                 url_segments = [urllib.parse.unquote(s) for s in parsed_url.path.strip("/").split("/") if s]
                 if len(url_segments) < 2:
-                    return {}
+                    return _reject_job_fetch(diagnostic, "format_drift", "SmartRecruiters URL did not identify a posting.")
 
                 # The company slug is stable; the page title can be an error or
                 # search-engine title and must never become the company name.
@@ -673,13 +841,13 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
                 details["location"] = location_match.group(1).strip() if location_match else ""
 
             else:
-                posting = _job_posting_json_ld(page)
+                scope, posting, has_embedded_frames = _select_job_content_scope(page)
                 organization = posting.get("hiringOrganization") or {}
-                title_element = page.query_selector("h1")
+                title_element = scope.query_selector("h1")
                 description = _plain_text(posting.get("description"))
                 if not description:
                     description = _largest_text(
-                        page,
+                        scope,
                         "[class*='job-description'], [id*='job-description'], main, article",
                     )
                 details["title"] = _plain_text(posting.get("title")) or (
@@ -687,16 +855,21 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
                 )
                 details["company"] = _plain_text(organization)
                 if not details["company"]:
-                    site_name = page.query_selector('meta[property="og:site_name"]')
+                    site_name = scope.query_selector('meta[property="og:site_name"]') or page.query_selector('meta[property="og:site_name"]')
                     details["company"] = (site_name.get_attribute("content") or "").strip() if site_name else ""
                 details["description"] = description
                 details["location"] = _job_location_from_json_ld(posting)
                 for key, value in _structured_job_metadata(posting).items():
                     details[key] = value or details.get(key, "")
+                if not any(details.get(key) for key in ("title", "company", "description")) and has_embedded_frames:
+                    return _reject_job_fetch(
+                        diagnostic, "embedded_content",
+                        "The posting is inside an embedded frame that did not expose readable job content.",
+                    )
                 
         except Exception as e:
             print(f"Error scraping details from {url}: {e}")
-            return {}
+            return _reject_job_fetch(diagnostic, "provider_error", f"Browser extraction failed: {type(e).__name__}.")
         finally:
             browser.close()
             
@@ -710,11 +883,53 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
 
     # Reject generic/error pages and content that cannot support a real match.
     if allow_partial and any(details.get(key) for key in ("title", "company", "description")):
+        if diagnostic is not None:
+            diagnostic.update({
+                "status": "ok" if all(details.get(key) for key in ("title", "company", "description")) else "partial",
+                "reason": "",
+            })
         return details
     if not is_useful_job_details(details):
-        return {}
+        return _reject_job_fetch(diagnostic, "format_drift", "The page loaded but did not expose a complete job posting.")
+    if diagnostic is not None:
+        diagnostic.update({"status": "ok", "reason": ""})
         
     return details
+
+
+def inspect_job_posting(url: str, allow_partial: bool = False) -> dict:
+    """Return extracted details together with a privacy-safe outcome classification."""
+    canonical_url = canonicalize_job_url(url)
+    is_public, reason = validate_public_http_url(canonical_url)
+    if not is_public:
+        return _job_fetch_outcome("unsafe_url", reason=reason)
+
+    if provider_for_url(canonical_url) == "lever":
+        api_outcome = _lever_posting_from_api(canonical_url)
+        if api_outcome["status"] != "api_unavailable":
+            return api_outcome
+        browser_diagnostic = {}
+        details = _scrape_job_details_browser(canonical_url, allow_partial, browser_diagnostic)
+        status = browser_diagnostic.get("status", "provider_error")
+        if status == "format_drift":
+            status = "provider_error"
+        reason = browser_diagnostic.get("reason") or api_outcome["reason"]
+        outcome = _job_fetch_outcome(status, details, reason)
+        outcome["used_browser_fallback"] = True
+        return outcome
+
+    browser_diagnostic = {}
+    details = _scrape_job_details_browser(canonical_url, allow_partial, browser_diagnostic)
+    return _job_fetch_outcome(
+        browser_diagnostic.get("status", "provider_error"),
+        details,
+        browser_diagnostic.get("reason", "Browser extraction did not complete."),
+    )
+
+
+def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
+    """Compatibility wrapper returning details only for callers that do not need diagnostics."""
+    return inspect_job_posting(url, allow_partial)["details"]
 
 def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
     """
@@ -779,7 +994,11 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
         provider: {
             "raw_candidates": 0, "valid_discovered": 0, "new_candidates": 0,
             "accepted": 0, "rejected": 0, "skipped_active": 0,
-            "skipped_archived": 0, "errors": [],
+            "skipped_archived": 0, "errors": [], "api_fallbacks": 0,
+            "rejection_reasons": {
+                "stale": 0, "format_drift": 0, "access_challenge": 0,
+                "embedded_content": 0, "provider_error": 0,
+            },
         }
         for provider in PROVIDER_DOMAINS
     }
@@ -818,10 +1037,16 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
         if provider in provider_health:
             provider_health[provider]["new_candidates"] += 1
             
-        job_details = scrape_job_details(url)
+        outcome = inspect_job_posting(url)
+        job_details = outcome["details"]
+        if provider in provider_health and outcome.get("used_browser_fallback"):
+            provider_health[provider]["api_fallbacks"] += 1
         if not job_details or not job_details.get("title"):
             if provider in provider_health:
                 provider_health[provider]["rejected"] += 1
+                reason = outcome.get("status", "provider_error")
+                reason = reason if reason in provider_health[provider]["rejection_reasons"] else "provider_error"
+                provider_health[provider]["rejection_reasons"][reason] += 1
             continue
             
         scraped_jobs.append(job_details)

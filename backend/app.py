@@ -15,9 +15,9 @@ from tailor import analyze_job_match, apply_resume_section_template, finalize_co
 from searcher import (
     MAX_JOB_DESCRIPTION_CHARS,
     canonicalize_job_url,
+    inspect_job_posting,
     provider_for_url,
     run_job_search_and_matching,
-    scrape_job_details,
     validate_public_http_url,
 )
 from utils import generate_resume_pdf, find_us_headquarters
@@ -32,7 +32,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260807.1"
+APP_BUILD = "20260807.2"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -356,7 +356,8 @@ def preview_manual_job(req: ManualJobPreviewRequest) -> dict:
             "job": {"url": canonical_url},
         }
 
-    details = scrape_job_details(canonical_url, allow_partial=True) or {}
+    outcome = inspect_job_posting(canonical_url, allow_partial=True)
+    details = outcome["details"]
     resolved_url = canonicalize_job_url(details.get("url") or canonical_url)
     if resolved_url != canonical_url:
         conn = get_db_connection()
@@ -387,15 +388,22 @@ def preview_manual_job(req: ManualJobPreviewRequest) -> dict:
         "source": source,
     }
     extraction_succeeded = all(job.get(key) for key in ("title", "company", "description"))
+    extraction_status = outcome.get("status", "provider_error")
+    messages = {
+        "ok": "Review the extracted details before saving.",
+        "partial": "Some details were extracted. Complete the missing required fields before saving.",
+        "stale": "The source reports that this posting is no longer published. Save only if you have verified the details elsewhere.",
+        "access_challenge": "The site blocked automated reading. Enter the posting details manually before saving.",
+        "embedded_content": "The posting is inside a protected embedded frame. Enter the posting details manually before saving.",
+        "format_drift": "The page loaded but its job data was not in a recognized format. Enter the required fields manually.",
+        "provider_error": "The posting could not be retrieved. You can still enter the required fields manually.",
+    }
     return {
         "success": True,
         "duplicate": False,
         "extraction_succeeded": extraction_succeeded,
-        "message": (
-            "Review the extracted details before saving."
-            if extraction_succeeded else
-            "The page could not be fully parsed. Complete the required fields before saving."
-        ),
+        "extraction_status": extraction_status,
+        "message": messages.get(extraction_status, "Complete the required fields before saving."),
         "job": job,
     }
 
@@ -678,7 +686,13 @@ def verify_job_posting(job_id: int) -> dict:
         raise HTTPException(status_code=404, detail="Job not found.")
 
     checked_at = datetime.now().isoformat(timespec="seconds")
-    details = scrape_job_details(job["url"])
+    outcome = inspect_job_posting(job["url"])
+    details = outcome["details"]
+    if not details and outcome.get("status") != "stale":
+        raise HTTPException(
+            status_code=503,
+            detail="The posting could not be verified because its source was unavailable or unreadable. No job status was changed.",
+        )
     conn = get_db_connection()
     if details:
         conn.execute("""
@@ -696,7 +710,7 @@ def verify_job_posting(job_id: int) -> dict:
         next_status = "closed" if job["status"] in {"matched", "tailored", "form_filled", "submitted"} else job["status"]
         conn.execute("""
             UPDATE jobs SET status = ?, last_checked_at = ?, is_expired = 1,
-                expiration_reason = 'Posting could not be validated'
+                expiration_reason = 'Source reports posting is no longer published'
             WHERE id = ?
         """, (next_status, checked_at, job_id))
         if next_status == "closed":
