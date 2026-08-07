@@ -148,7 +148,7 @@ The server validates that the candidate set has not changed since the preview. I
 - Choose a resume mode under **Profile & Resume** before tailoring. Generated resume and cover-letter text can be edited in **View Materials**; **Save Edits** regenerates both downloadable artifacts.
 - Each resume mode uses a deterministic section template before PDF generation. Manual application dates accept direct `MM/DD/YYYY` or `YYYY-MM-DD` entry and also provide a calendar picker.
 
-The app is designed for local access at `127.0.0.1`. Cross-origin browser access is intentionally disabled, and profile reads return only API-key configuration flags—not stored key values.
+The app is designed for local access at `127.0.0.1`. It rejects non-loopback Host headers and cross-site state-changing browser requests, while still allowing local command-line clients that do not send browser-origin headers. Resume text uploads are streamed and limited to 2 MB. Cross-origin browser access is intentionally disabled, and profile reads return only API-key configuration flags—not stored key values. Do not bind the current single-user application to a public or shared network interface; public hosting requires authentication, per-user authorization, isolated files/data, and protected secret storage first.
 
 ### Optional anonymous analytics
 

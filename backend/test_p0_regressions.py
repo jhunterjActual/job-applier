@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import app as app_module
 import materials as materials_module
+from fastapi.testclient import TestClient
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from materials import material_download_name, persist_cover_letter, resolve_output_file
 from database import get_db_connection
@@ -175,8 +176,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260806-1", html_source)
-        self.assertIn("index.css?v=20260806-1", html_source)
+        self.assertIn("app.js?v=20260806-2", html_source)
+        self.assertIn("index.css?v=20260806-2", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -184,7 +185,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260806.1", source)
+                self.assertIn("20260806.2", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -259,6 +260,79 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertNotIn("CORSMiddleware", app_source)
         self.assertIn('result.pop("gemini_api_key"', app_source)
         self.assertIn('result.pop("google_maps_api_key"', app_source)
+
+
+class LocalBrowserBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(app_module.app, base_url="http://127.0.0.1:8001")
+
+    def tearDown(self) -> None:
+        self.client.close()
+
+    def test_non_loopback_host_is_rejected_before_routing(self) -> None:
+        response = self.client.get("/api/version", headers={"Host": "attacker.example"})
+        self.assertEqual(400, response.status_code)
+        self.assertEqual("Invalid local Host header.", response.json()["detail"])
+
+    def test_cross_site_writes_are_rejected_but_local_clients_reach_routing(self) -> None:
+        hostile_origin = self.client.post(
+            "/api/not-a-real-route",
+            headers={"Origin": "https://attacker.example"},
+        )
+        hostile_referer = self.client.post(
+            "/api/not-a-real-route",
+            headers={"Referer": "https://attacker.example/form"},
+        )
+        cross_site_fetch = self.client.post(
+            "/api/not-a-real-route",
+            headers={"Sec-Fetch-Site": "same-site"},
+        )
+        same_origin = self.client.post(
+            "/api/not-a-real-route",
+            headers={"Origin": "http://127.0.0.1:8001", "Sec-Fetch-Site": "same-origin"},
+        )
+        local_cli = self.client.post("/api/not-a-real-route")
+        self.assertEqual(403, hostile_origin.status_code)
+        self.assertEqual(403, hostile_referer.status_code)
+        self.assertEqual(403, cross_site_fetch.status_code)
+        self.assertEqual(404, same_origin.status_code)
+        self.assertEqual(404, local_cli.status_code)
+
+    def test_oversized_resume_is_rejected_without_changing_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "profile.db"
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE profile (
+                    id INTEGER PRIMARY KEY, base_resume_text TEXT, suggested_keywords TEXT
+                );
+                INSERT INTO profile VALUES (1, 'Original resume', '');
+            """)
+            connection.close()
+
+            def connection_factory():
+                test_connection = sqlite3.connect(database_path)
+                test_connection.row_factory = sqlite3.Row
+                return test_connection
+
+            with patch.object(app_module, "get_db_connection", connection_factory):
+                response = self.client.post(
+                    "/api/profile/upload-resume",
+                    headers={"Origin": "http://127.0.0.1:8001"},
+                    files={
+                        "file": (
+                            "resume.txt",
+                            b"a" * (app_module.MAX_RESUME_UPLOAD_BYTES + 1),
+                            "text/plain",
+                        )
+                    },
+                )
+
+            self.assertEqual(413, response.status_code)
+            connection = sqlite3.connect(database_path)
+            stored = connection.execute("SELECT base_resume_text FROM profile WHERE id = 1").fetchone()[0]
+            connection.close()
+            self.assertEqual("Original resume", stored)
 
 
 class HeadquartersPreferenceTests(unittest.TestCase):

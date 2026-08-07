@@ -2,9 +2,9 @@ import os
 import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Literal, Optional
 from datetime import date, datetime, timedelta
@@ -25,7 +25,10 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260806.1"
+APP_BUILD = "20260806.2"
+MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 @asynccontextmanager
@@ -41,9 +44,56 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AI Job Applier Agent API", lifespan=lifespan)
 
 
+def _local_authority(authority: str, scheme: str = "http") -> Optional[tuple[str, int]]:
+    """Return a normalized loopback host and port, or None for an unsafe authority."""
+    if not authority or any(character in authority for character in "/\\@"):
+        return None
+    try:
+        parsed = urlsplit(f"//{authority}")
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        return None
+    if hostname not in LOCAL_HOSTS:
+        return None
+    return hostname, port
+
+
+def _same_local_origin(value: str, request_authority: tuple[str, int], scheme: str) -> bool:
+    """Validate an Origin or Referer value against the exact local request origin."""
+    try:
+        parsed = urlsplit(value)
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == scheme
+        and hostname == request_authority[0]
+        and port == request_authority[1]
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
 @app.middleware("http")
-async def prevent_stale_local_ui(request, call_next):
-    """Keep the local dashboard HTML and JavaScript from drifting out of sync."""
+async def protect_local_browser_boundary(request: Request, call_next):
+    """Enforce the loopback-only browser trust boundary and prevent cross-site writes."""
+    request_authority = _local_authority(request.headers.get("host", ""), request.url.scheme)
+    if request_authority is None:
+        return JSONResponse({"detail": "Invalid local Host header."}, status_code=400)
+
+    if request.method.upper() not in SAFE_HTTP_METHODS:
+        fetch_site = request.headers.get("sec-fetch-site", "").lower()
+        if fetch_site in {"cross-site", "same-site"}:
+            return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
+
+        origin = request.headers.get("origin")
+        referer = request.headers.get("referer")
+        source = origin or referer
+        if source and not _same_local_origin(source, request_authority, request.url.scheme):
+            return JSONResponse({"detail": "Request origin does not match this local app."}, status_code=403)
+
     response = await call_next(request)
     if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, max-age=0"
@@ -185,22 +235,38 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
     Returns:
         dict: Success status and the parsed resume text.
     """
-    if not file.filename.endswith(('.txt', '.md')):
+    if not (file.filename or "").lower().endswith(('.txt', '.md')):
         raise HTTPException(status_code=400, detail="Only .txt and .md text files are supported for resume upload.")
-        
+
     try:
-        content = await file.read()
-        resume_text = content.decode("utf-8")
-        
+        content = bytearray()
+        while chunk := await file.read(64 * 1024):
+            content.extend(chunk)
+            if len(content) > MAX_RESUME_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Resume files must be 2 MB or smaller.",
+                )
+        try:
+            resume_text = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Resume files must use UTF-8 text encoding.") from exc
+
         # Save to database
         conn = get_db_connection()
-        conn.execute("UPDATE profile SET base_resume_text = ?, suggested_keywords = '' WHERE id = 1", (resume_text,))
-        conn.commit()
-        conn.close()
-        
+        try:
+            conn.execute("UPDATE profile SET base_resume_text = ?, suggested_keywords = '' WHERE id = 1", (resume_text,))
+            conn.commit()
+        finally:
+            conn.close()
+
         return {"success": True, "resume_text": resume_text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to read the resume file.") from exc
+    finally:
+        await file.close()
 
 IS_SEARCHING = False
 LAST_SEARCH_RESULT = None

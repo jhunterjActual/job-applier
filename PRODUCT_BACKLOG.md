@@ -26,11 +26,14 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [x] Replace frontend `innerHTML` interpolation of job data with safe DOM construction and validated links.
 - [x] Stop returning plaintext API keys from profile reads; mask keys and use dedicated secret-update operations.
 - [x] Restrict CORS and define the supported local-only deployment threat model.
+- [x] Enforce the local browser trust boundary: reject non-loopback Host headers, block cross-site unsafe requests using Origin/Referer and Fetch Metadata, and cap streamed resume uploads at 2 MB.
 - [x] Add pipeline statuses with notes, follow-up dates, interviews, offers, rejections, withdrawals, and closed roles.
 - [x] Add saved searches, duplicate detection, and on-demand expired-posting checks.
+- [ ] Add a manual job-import workflow that accepts a posting URL from any site, validates and canonicalizes the URL, detects duplicates, extracts available job details with a preview before saving, and allows the user to complete or correct fields when the source cannot be parsed.
 - [x] Add optional scheduled alerts for saved searches.
 - [x] Detect job-source format drift using provider health checks, expected content/selector contracts, and rejection-rate baselines; alert the user when a provider appears incompatible instead of silently returning no results, including a safe diagnostic summary and affected provider.
 - [ ] Make Lever source diagnostics resilient and specific: use the official read-only Lever Postings JSON API as the primary job-detail source; classify missing, removed, or expired postings as stale instead of format drift; reserve format-drift alerts for successful responses with invalid schemas; retain privacy-safe rejection-category counts; and use browser scraping only when the API is unavailable.
+- [ ] Restrict Playwright job-page redirects and subresources to public HTTP(S) destinations by resolving and blocking loopback, link-local, private-network, and non-web targets without breaking supported ATS providers.
 - [x] Add a saved profile toggle to prefer a U.S. headquarters address when an employer has multiple headquarters, incorporate it into address resolution for unemployment reporting, and reject non-U.S. Places matches from the U.S.-preferred lookup before a verified global fallback.
 - [x] Add sortable/filterable job results with status and a user-adjustable minimum match-score control.
 - [x] Enrich job results with normalized location, work arrangement, compensation, date found, and source fields.
@@ -52,6 +55,9 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [ ] Add interview preparation and response-rate analytics by source, role, location, resume version, and application method.
 - [ ] Add multilingual assistance, mobile responsiveness, accessibility QA, encrypted backup, restore, and data export.
 - [ ] Design an opt-in, privacy-preserving provider-failure reporting mechanism for broader releases so repeated format-drift alerts can notify maintainers without transmitting resumes, API keys, job-application data, or unnecessary browsing details.
+- [ ] Bound remote search response bytes, per-provider candidate counts, and retained job-description sizes; add explicit network timeouts and clear partial-result diagnostics when a source exceeds a budget.
+- [ ] Add an optional privacy-safe Sentry integration and operator setup guide. Keep local variables, request bodies, profile/resume content, job details, URLs, API keys, and generated materials out of events; document read-only Codex inspection credentials separately from the application DSN.
+- [ ] Replace broad mutable dependency ranges with a reproducible, reviewed lock or constraints file and an intentional dependency-update workflow.
 - [ ] Add recruiter, hiring-manager, referral, assessment, and networking tracking.
 - [ ] Add PDF metadata, accessible document semantics, clickable contact links, and recruiter-friendly filenames.
 
