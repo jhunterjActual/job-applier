@@ -45,7 +45,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 ## P2 - Broader job-seeker value
 
 - [x] Replace the inherited GCD site icon with Job Applier branding, including appropriate favicon, pinned-tab, application-manifest, and mobile home-screen assets.
-- [ ] Show a privacy-safe "Maps API key saved" state and replacement guidance in Profile & Resume, matching the existing Gemini-key experience without revealing either stored key.
+- [x] Show a privacy-safe "Maps API key saved" state and replacement guidance in Profile & Resume, matching the existing Gemini-key experience without revealing either stored key.
 - [ ] Add an AI-provider abstraction with securely stored bring-your-own keys, model selection, capability validation, and clear provider-specific errors; support providers beyond Gemini without exposing secrets to the browser.
 - [ ] Add a geocoding/maps-provider abstraction with provider selection, securely stored credentials, validation, rate-limit handling, and support for alternatives to Google Maps.
 - [x] Polish the cleanup-preview modal action bar: prevent Restore counts and labels from wrapping awkwardly, use consistent button sizing and icon alignment, establish a clearer primary/secondary/destructive hierarchy, and stack actions cleanly at narrow widths.

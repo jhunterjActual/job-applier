@@ -592,6 +592,44 @@ select:focus {
     color: var(--text-muted);
 }
 
+.secret-key-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    margin-top: 7px;
+}
+
+.secret-key-status {
+    flex: 0 0 auto;
+    padding: 3px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-full);
+    background: hsla(0, 0%, 100%, 0.03);
+    color: var(--text-secondary);
+    font-size: 11.5px;
+    font-weight: 700;
+    line-height: 1.3;
+}
+
+.secret-key-status.configured {
+    border-color: rgba(34, 197, 94, 0.35);
+    background: rgba(34, 197, 94, 0.1);
+    color: var(--color-green);
+}
+
+.secret-key-status.missing {
+    border-color: rgba(234, 179, 8, 0.35);
+    background: rgba(234, 179, 8, 0.1);
+    color: var(--color-yellow);
+}
+
+.secret-key-status.unavailable {
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.1);
+    color: var(--color-red);
+}
+
 .margin-top-sm { margin-top: 8px; }
 .margin-bottom-md { margin-bottom: 24px; }
 
