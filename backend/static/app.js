@@ -1074,7 +1074,8 @@ function renderProviderAlerts(searchResult) {
         return;
     }
     providerAlerts.hidden = false;
-    providerAlerts.appendChild(createElement("strong", "", "Some job sources may need attention"));
+    const needsAttention = alerts.some(alert => alert.code !== "stale_postings");
+    providerAlerts.appendChild(createElement("strong", "", needsAttention ? "Some job sources may need attention" : "Search notes"));
     const list = createElement("ul", "margin-top-sm");
     alerts.forEach(alert => list.appendChild(createElement("li", "", alert.message)));
     providerAlerts.appendChild(list);

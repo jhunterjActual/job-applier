@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 import app as app_module
 import materials as materials_module
+import searcher as searcher_module
 from fastapi.testclient import TestClient
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from materials import material_download_name, persist_cover_letter, resolve_output_file
@@ -184,8 +186,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260807-1", html_source)
-        self.assertIn("index.css?v=20260807-1", html_source)
+        self.assertIn("app.js?v=20260807-2", html_source)
+        self.assertIn("index.css?v=20260807-2", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -193,7 +195,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260807.1", source)
+                self.assertIn("20260807.2", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -364,7 +366,11 @@ class ManualJobImportTests(unittest.TestCase):
                 description TEXT, url TEXT UNIQUE, match_score INTEGER,
                 match_analysis TEXT, date_found TEXT, status TEXT, location TEXT,
                 work_arrangement TEXT, employment_type TEXT, compensation TEXT,
-                source TEXT, last_checked_at TEXT, is_expired INTEGER
+                source TEXT, last_checked_at TEXT, is_expired INTEGER,
+                expiration_reason TEXT
+            );
+            CREATE TABLE applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER, status TEXT
             );
             INSERT INTO profile VALUES (1, 'Experienced data leader', 'test-key');
         """)
@@ -383,7 +389,7 @@ class ManualJobImportTests(unittest.TestCase):
         scraper = unittest.mock.Mock()
         with (
             patch.object(app_module, "get_db_connection", database),
-            patch.object(app_module, "scrape_job_details", scraper),
+            patch.object(app_module, "inspect_job_posting", scraper),
             self.assertRaisesRegex(app_module.HTTPException, "Local, private-network"),
         ):
             app_module.preview_manual_job(
@@ -402,7 +408,9 @@ class ManualJobImportTests(unittest.TestCase):
         with (
             patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
             patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
-            patch.object(app_module, "scrape_job_details", return_value=extracted),
+            patch.object(app_module, "inspect_job_posting", return_value={
+                "status": "ok", "reason": "", "details": extracted,
+            }),
         ):
             result = app_module.preview_manual_job(
                 app_module.ManualJobPreviewRequest(url="https://example.test/jobs/123?utm_source=email")
@@ -453,7 +461,7 @@ class ManualJobImportTests(unittest.TestCase):
         with (
             patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
             patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
-            patch.object(app_module, "scrape_job_details", scraper),
+            patch.object(app_module, "inspect_job_posting", scraper),
         ):
             result = app_module.preview_manual_job(
                 app_module.ManualJobPreviewRequest(url="https://example.test/jobs/123?utm_campaign=test")
@@ -472,9 +480,11 @@ class ManualJobImportTests(unittest.TestCase):
         with (
             patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
             patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
-            patch.object(app_module, "scrape_job_details", return_value={
-                "url": "https://careers.example.test/jobs/123",
-                "title": "Data Director",
+            patch.object(app_module, "inspect_job_posting", return_value={
+                "status": "partial", "reason": "", "details": {
+                    "url": "https://careers.example.test/jobs/123",
+                    "title": "Data Director",
+                },
             }),
         ):
             result = app_module.preview_manual_job(
@@ -483,6 +493,22 @@ class ManualJobImportTests(unittest.TestCase):
 
         self.assertTrue(result["duplicate"])
         self.assertEqual("https://careers.example.test/jobs/123", result["job"]["url"])
+
+    def test_preview_explains_access_challenge_and_preserves_manual_entry(self) -> None:
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "inspect_job_posting", return_value={
+                "status": "access_challenge", "reason": "Automated access blocked.", "details": {},
+            }),
+        ):
+            result = app_module.preview_manual_job(
+                app_module.ManualJobPreviewRequest(url="https://jobs.example.test/opening/123")
+            )
+
+        self.assertFalse(result["extraction_succeeded"])
+        self.assertEqual("access_challenge", result["extraction_status"])
+        self.assertIn("Enter the posting details manually", result["message"])
 
     def test_save_without_ai_key_keeps_job_visible_as_unscored(self) -> None:
         connection = self.connection_factory()
@@ -532,6 +558,32 @@ class ManualJobImportTests(unittest.TestCase):
         connection.close()
         self.assertIsNotNone(stored)
         self.assertIsNone(stored["match_score"])
+
+    def test_verification_error_does_not_close_active_job(self) -> None:
+        connection = self.connection_factory()
+        cursor = connection.execute(
+            "INSERT INTO jobs (title, company, description, url, status, is_expired) VALUES (?, ?, ?, ?, ?, 0)",
+            ("Data Director", "Example", "Complete description", "https://example.test/jobs/verify", "matched"),
+        )
+        connection.commit()
+        job_id = cursor.lastrowid
+        connection.close()
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "inspect_job_posting", return_value={
+                "status": "format_drift", "details": {}, "reason": "Unexpected format.",
+            }),
+            self.assertRaisesRegex(app_module.HTTPException, "No job status was changed"),
+        ):
+            app_module.verify_job_posting(job_id)
+
+        connection = self.connection_factory()
+        stored = connection.execute(
+            "SELECT status, is_expired FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        connection.close()
+        self.assertEqual("matched", stored["status"])
+        self.assertEqual(0, stored["is_expired"])
 
 
 class HeadquartersPreferenceTests(unittest.TestCase):
@@ -604,6 +656,19 @@ class HeadquartersPreferenceTests(unittest.TestCase):
 
 
 class SearchQualityTests(unittest.TestCase):
+    class FakeHttpResponse:
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return self.payload
+
     def test_generic_smartrecruiters_career_pages_are_not_job_postings(self) -> None:
         self.assertFalse(is_specific_job_url("https://careers.smartrecruiters.com/QADInc/corporate-careers"))
         self.assertTrue(is_specific_job_url("https://jobs.smartrecruiters.com/Example/12345-data-analyst"))
@@ -691,6 +756,7 @@ class SearchQualityTests(unittest.TestCase):
     def test_provider_detection_and_metadata_normalization(self) -> None:
         self.assertEqual("greenhouse", provider_for_url("https://job-boards.greenhouse.io/acme/jobs/123"))
         self.assertEqual("ashby", provider_for_url("https://jobs.ashbyhq.com/acme/123"))
+        self.assertEqual("lever", provider_for_url("https://jobs.eu.lever.co/acme/123"))
         metadata = _metadata_from_text("Remote full time role. Compensation $120,000 - $150,000 per year.")
         self.assertEqual("remote", metadata["work_arrangement"])
         self.assertEqual("full_time", metadata["employment_type"])
@@ -765,6 +831,140 @@ class SearchQualityTests(unittest.TestCase):
         health = {"ashby": {"raw_candidates": 4, "valid_discovered": 4, "new_candidates": 3, "accepted": 0, "errors": []}}
         alerts = provider_alerts_from_health(health)
         self.assertEqual("content_format_drift", alerts[0]["code"])
+
+    def test_lever_api_response_is_normalized_without_browser_scraping(self) -> None:
+        payload = json.dumps({
+            "id": "posting-123",
+            "text": "Director of Data",
+            "descriptionPlain": "Lead enterprise data strategy, governance, analytics, architecture, and delivery across the organization. " * 2,
+            "categories": {
+                "location": "Dayton, OH", "allLocations": ["Dayton, OH", "Remote"],
+                "commitment": "Full-time",
+            },
+            "workplaceType": "hybrid",
+            "salaryRange": {"currency": "USD", "interval": "year", "min": 150000, "max": 190000},
+        }).encode("utf-8")
+        with patch.object(
+            searcher_module.urllib.request,
+            "urlopen",
+            return_value=self.FakeHttpResponse(payload),
+        ) as urlopen:
+            outcome = searcher_module._lever_posting_from_api(
+                "https://jobs.lever.co/acme-corp/posting-123"
+            )
+
+        self.assertEqual("ok", outcome["status"])
+        self.assertEqual("Director of Data", outcome["details"]["title"])
+        self.assertEqual("Acme Corp", outcome["details"]["company"])
+        self.assertEqual("Dayton, OH; Remote", outcome["details"]["location"])
+        self.assertEqual("hybrid", outcome["details"]["work_arrangement"])
+        self.assertEqual("full_time", outcome["details"]["employment_type"])
+        self.assertEqual("USD 150,000–190,000 per year", outcome["details"]["compensation"])
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            "https://api.lever.co/v0/postings/acme-corp/posting-123",
+            request.full_url,
+        )
+
+    def test_lever_removed_posting_is_stale_without_browser_fallback(self) -> None:
+        stale = {"status": "stale", "details": {}, "reason": "No longer published."}
+        browser = unittest.mock.Mock()
+        with (
+            patch.object(searcher_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(searcher_module, "_lever_posting_from_api", return_value=stale),
+            patch.object(searcher_module, "_scrape_job_details_browser", browser),
+        ):
+            outcome = searcher_module.inspect_job_posting(
+                "https://jobs.lever.co/acme/posting-123"
+            )
+
+        self.assertEqual("stale", outcome["status"])
+        browser.assert_not_called()
+
+    def test_lever_invalid_successful_response_is_format_drift(self) -> None:
+        payload = json.dumps({"id": "posting-123", "categories": []}).encode("utf-8")
+        with patch.object(
+            searcher_module.urllib.request,
+            "urlopen",
+            return_value=self.FakeHttpResponse(payload),
+        ):
+            outcome = searcher_module._lever_posting_from_api(
+                "https://jobs.lever.co/acme/posting-123"
+            )
+
+        self.assertEqual("format_drift", outcome["status"])
+
+    def test_lever_api_not_found_is_classified_as_stale(self) -> None:
+        error = searcher_module.urllib.error.HTTPError(
+            "https://api.lever.co/v0/postings/acme/posting-123",
+            404,
+            "Not Found",
+            hdrs=None,
+            fp=None,
+        )
+        with patch.object(searcher_module.urllib.request, "urlopen", side_effect=error):
+            outcome = searcher_module._lever_posting_from_api(
+                "https://jobs.lever.co/acme/posting-123"
+            )
+
+        self.assertEqual("stale", outcome["status"])
+
+    def test_lever_api_unavailable_uses_browser_fallback(self) -> None:
+        def browser_fallback(_url, _allow_partial, diagnostic):
+            diagnostic.update({"status": "ok", "reason": ""})
+            return {"title": "Fallback role", "company": "Acme", "description": "Complete description"}
+
+        with (
+            patch.object(searcher_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(searcher_module, "_lever_posting_from_api", return_value={
+                "status": "api_unavailable", "details": {}, "reason": "Timed out.",
+            }),
+            patch.object(searcher_module, "_scrape_job_details_browser", side_effect=browser_fallback),
+        ):
+            outcome = searcher_module.inspect_job_posting(
+                "https://jobs.lever.co/acme/posting-123"
+            )
+
+        self.assertEqual("ok", outcome["status"])
+        self.assertTrue(outcome["used_browser_fallback"])
+
+    def test_lever_stale_postings_do_not_create_format_drift_alert(self) -> None:
+        health = {
+            "lever": {
+                "raw_candidates": 3, "valid_discovered": 3, "new_candidates": 3,
+                "accepted": 0, "errors": [],
+                "rejection_reasons": {"stale": 3, "format_drift": 0},
+            }
+        }
+
+        alerts = provider_alerts_from_health(health)
+
+        self.assertEqual(["stale_postings"], [alert["code"] for alert in alerts])
+
+    def test_generic_extraction_prefers_structured_job_data_in_child_frame(self) -> None:
+        class Scope:
+            def __init__(self, url):
+                self.url = url
+
+        page = Scope("https://careers.example.test/openings/123")
+        frame = Scope("https://embedded.example.test/jobs/123")
+        page.main_frame = page
+        page.frames = [page, frame]
+        framed_posting = {"@type": "JobPosting", "title": "Framed role"}
+
+        with (
+            patch.object(
+                searcher_module,
+                "_job_posting_json_ld",
+                side_effect=lambda scope: framed_posting if scope is frame else {},
+            ),
+            patch.object(searcher_module, "_largest_text", return_value=""),
+        ):
+            scope, posting, has_job_frame = searcher_module._select_job_content_scope(page)
+
+        self.assertIs(frame, scope)
+        self.assertEqual(framed_posting, posting)
+        self.assertTrue(has_job_frame)
 
 
 class ResumeTemplateTests(unittest.TestCase):
