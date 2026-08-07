@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260807-2">
+    <link rel="stylesheet" href="/static/index.css?v=20260807-3">
 </head>
 <body>
     <div class="app-container">
@@ -174,22 +174,28 @@
                                 <div class="form-group full-width">
                                     <label for="p-apikey">Gemini API Key</label>
                                     <div class="password-input-container">
-                                        <input type="password" id="p-apikey" placeholder="Enter API Key (AI-xxxx...)">
+                                        <input type="password" id="p-apikey" placeholder="Enter API Key (AI-xxxx...)" aria-describedby="p-gemini-key-status p-gemini-key-help">
                                         <button type="button" class="toggle-password" id="toggle-api-visibility">
                                             <i class="fa-solid fa-eye"></i>
                                         </button>
                                     </div>
-                                    <small class="form-help">Your API key is stored locally on your machine.</small>
+                                    <div class="secret-key-meta">
+                                        <span class="secret-key-status checking" id="p-gemini-key-status" role="status" aria-live="polite">Checking saved status…</span>
+                                        <small class="form-help" id="p-gemini-key-help">Your API key is stored locally on your machine.</small>
+                                    </div>
                                 </div>
                                 <div class="form-group full-width">
                                     <label for="p-google-apikey">Google Maps API Key (Optional)</label>
                                     <div class="password-input-container">
-                                        <input type="password" id="p-google-apikey" placeholder="Enter Google Maps API Key to conserve Gemini quota">
+                                        <input type="password" id="p-google-apikey" placeholder="Enter Google Maps API Key to conserve Gemini quota" aria-describedby="p-google-key-status p-google-key-help">
                                         <button type="button" class="toggle-password" id="toggle-google-api-visibility">
                                             <i class="fa-solid fa-eye"></i>
                                         </button>
                                     </div>
-                                    <small class="form-help">Uses the Google Places API for headquarters street address resolution if provided.</small>
+                                    <div class="secret-key-meta">
+                                        <span class="secret-key-status checking" id="p-google-key-status" role="status" aria-live="polite">Checking saved status…</span>
+                                        <small class="form-help" id="p-google-key-help">Uses the Google Places API for headquarters street address resolution if provided.</small>
+                                    </div>
                                 </div>
                                 <div class="form-group full-width">
                                     <label>
@@ -652,6 +658,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260807-2"></script>
+    <script src="/static/app.js?v=20260807-3"></script>
 </body>
 </html>

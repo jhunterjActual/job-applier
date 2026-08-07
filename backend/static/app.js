@@ -32,6 +32,10 @@ const pLinkedin = document.getElementById("p-linkedin");
 const pWebsite = document.getElementById("p-website");
 const pApiKey = document.getElementById("p-apikey");
 const pGoogleApiKey = document.getElementById("p-google-apikey");
+const pGeminiKeyStatus = document.getElementById("p-gemini-key-status");
+const pGeminiKeyHelp = document.getElementById("p-gemini-key-help");
+const pGoogleKeyStatus = document.getElementById("p-google-key-status");
+const pGoogleKeyHelp = document.getElementById("p-google-key-help");
 const pResume = document.getElementById("p-resume");
 const pResumeMode = document.getElementById("p-resume-mode");
 const pPreferUsHeadquarters = document.getElementById("p-prefer-us-headquarters");
@@ -652,6 +656,42 @@ function updateApiKeyStatus(hasKey) {
     }
 }
 
+function updateSecretFieldStatus(input, status, help, configured, providerName, configuredHelp, missingHelp) {
+    input.placeholder = configured ? "Saved — enter a new key to replace" : `Enter ${providerName} API key`;
+    status.className = `secret-key-status ${configured ? "configured" : "missing"}`;
+    status.textContent = configured ? "Saved" : "Not saved";
+    help.textContent = configured ? configuredHelp : missingHelp;
+}
+
+function updateSecretStatuses() {
+    updateSecretFieldStatus(
+        pApiKey,
+        pGeminiKeyStatus,
+        pGeminiKeyHelp,
+        geminiKeyConfigured,
+        "Gemini",
+        "Saved locally. Leave this field blank to keep the current key, or enter a new key to replace it.",
+        "Required for AI matching and tailoring. The key is stored only on this machine.",
+    );
+    updateSecretFieldStatus(
+        pGoogleApiKey,
+        pGoogleKeyStatus,
+        pGoogleKeyHelp,
+        googleMapsKeyConfigured,
+        "optional Google Maps",
+        "Saved locally. Leave this field blank to keep the current key, or enter a new key to replace it.",
+        "Optional. Used by Google Places to resolve headquarters street addresses.",
+    );
+    updateApiKeyStatus(geminiKeyConfigured);
+}
+
+function markSecretStatusesUnavailable() {
+    [pGeminiKeyStatus, pGoogleKeyStatus].forEach(status => {
+        status.className = "secret-key-status unavailable";
+        status.textContent = "Status unavailable";
+    });
+}
+
 // ----------------------------------------------------
 // API Communication Logic
 // ----------------------------------------------------
@@ -674,15 +714,12 @@ async function loadProfile() {
             pGoogleApiKey.value = "";
             geminiKeyConfigured = !!profile.gemini_api_key_configured;
             googleMapsKeyConfigured = !!profile.google_maps_api_key_configured;
-            pApiKey.placeholder = geminiKeyConfigured ? "Saved — enter a new key to replace" : "Enter Gemini API key";
-            pGoogleApiKey.placeholder = googleMapsKeyConfigured ? "Saved — enter a new key to replace" : "Enter optional Google Maps API key";
+            updateSecretStatuses();
             pResume.value = profile.base_resume_text || "";
             pResumeMode.value = profile.resume_mode || "general_professional";
             pPreferUsHeadquarters.checked = profile.prefer_us_headquarters !== 0;
             
             userDisplayName.innerText = profile.name || "Candidate";
-            updateApiKeyStatus(geminiKeyConfigured);
-            
             // Sync dashboard statistics
             updateDashboardStats();
         }
@@ -692,6 +729,7 @@ async function loadProfile() {
         const statusText = apiStatusBadge?.querySelector(".status-text");
         if (indicator) indicator.className = "status-indicator red";
         if (statusText) statusText.innerText = "Profile API Unavailable";
+        markSecretStatusesUnavailable();
         logActivity("Error Loading Profile", "Could not fetch profile settings from database.", "error");
     }
 }
@@ -741,7 +779,7 @@ async function saveProfile(e) {
         
         if (result.success) {
             userDisplayName.innerText = payload.name || "Candidate";
-            updateApiKeyStatus(geminiKeyConfigured);
+            updateSecretStatuses();
             logActivity("Profile Saved", "Contact details and API key configured.", "success");
             hideLoading();
             alert("Profile settings saved successfully!");

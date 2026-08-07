@@ -113,6 +113,7 @@ If you prefer setting up manually or are on macOS/Linux:
 1. **Set up Profile**:
    - Go to the **Profile & Resume** tab.
    - Enter your contact details, personal links, and paste your **Gemini API Key** (and optional **Google Maps API Key**).
+   - Each key field shows a privacy-safe **Saved** or **Not saved** status. Saved keys are never displayed; leave the field blank to keep the current key or enter a new key to replace it.
    - Keep **Prefer a U.S. headquarters address** selected when U.S. unemployment reporting requires a domestic employer address; clear it to prefer the employer's primary global headquarters.
    - Upload your base resume as a `.txt` or `.md` file, or copy-paste it directly.
    - Click **Save Settings**.

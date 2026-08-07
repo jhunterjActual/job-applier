@@ -177,6 +177,8 @@ class FrontendStartupTests(unittest.TestCase):
             "download-resume-btn", "download-cover-letter-btn",
             "saved-search-select", "p-resume-mode",
             "p-prefer-us-headquarters",
+            "p-gemini-key-status", "p-gemini-key-help",
+            "p-google-key-status", "p-google-key-help",
             "lifecycle-applied-calendar-btn", "saved-search-frequency", "provider-alerts",
             "open-job-import-btn", "job-import-modal", "job-import-form",
             "job-import-url", "preview-job-import-btn", "job-import-fields",
@@ -186,8 +188,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260807-2", html_source)
-        self.assertIn("index.css?v=20260807-2", html_source)
+        self.assertIn("app.js?v=20260807-3", html_source)
+        self.assertIn("index.css?v=20260807-3", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -195,7 +197,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260807.2", source)
+                self.assertIn("20260807.3", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -271,12 +273,58 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn('result.pop("gemini_api_key"', app_source)
         self.assertIn('result.pop("google_maps_api_key"', app_source)
 
+    def test_profile_ui_exposes_privacy_safe_key_status_and_replacement_guidance(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+        script_source = (static_dir / "app.js").read_text(encoding="utf-8")
+        self.assertIn('role="status" aria-live="polite"', html_source)
+        self.assertIn("updateSecretStatuses", script_source)
+        self.assertIn('status.textContent = configured ? "Saved" : "Not saved"', script_source)
+        self.assertIn("Leave this field blank to keep the current key", script_source)
+        self.assertNotRegex(script_source, r"profile\.google_maps_api_key(?!_configured)")
+        self.assertNotRegex(script_source, r"profile\.gemini_api_key(?!_configured)")
+
     def test_manual_import_ui_preserves_unscored_jobs(self) -> None:
         script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn("/api/jobs/import/preview", script_source)
         self.assertIn("/api/jobs/import", script_source)
         self.assertIn('job.match_score === null', script_source)
         self.assertIn('"Unscored"', script_source)
+
+
+class ProfileSecretPresenceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "profile-secrets.db"
+        connection = sqlite3.connect(self.db_path)
+        connection.executescript("""
+            CREATE TABLE profile (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                gemini_api_key TEXT,
+                google_maps_api_key TEXT
+            );
+            INSERT INTO profile VALUES (1, 'Test Candidate', 'gemini-secret', '');
+        """)
+        connection.commit()
+        connection.close()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def connection_factory(self):
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def test_profile_returns_presence_flags_without_secret_values(self) -> None:
+        with patch.object(app_module, "get_db_connection", side_effect=self.connection_factory):
+            profile = app_module.get_profile()
+
+        self.assertTrue(profile["gemini_api_key_configured"])
+        self.assertFalse(profile["google_maps_api_key_configured"])
+        self.assertNotIn("gemini_api_key", profile)
+        self.assertNotIn("google_maps_api_key", profile)
 
 
 class LocalBrowserBoundaryTests(unittest.TestCase):
