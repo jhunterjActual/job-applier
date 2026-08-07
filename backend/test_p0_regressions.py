@@ -13,9 +13,13 @@ from materials import material_download_name, persist_cover_letter, resolve_outp
 from database import get_db_connection
 from job_cleanup import apply_cleanup, cleanup_preview
 from searcher import (
+    _job_location_from_json_ld,
+    _protect_browser_network,
+    _structured_job_metadata,
     _metadata_from_text,
     canonicalize_job_url,
     is_specific_job_url,
+    is_public_http_url,
     is_useful_job_details,
     provider_alerts_from_health,
     provider_for_url,
@@ -172,12 +176,16 @@ class FrontendStartupTests(unittest.TestCase):
             "saved-search-select", "p-resume-mode",
             "p-prefer-us-headquarters",
             "lifecycle-applied-calendar-btn", "saved-search-frequency", "provider-alerts",
+            "open-job-import-btn", "job-import-modal", "job-import-form",
+            "job-import-url", "preview-job-import-btn", "job-import-fields",
+            "job-import-company", "job-import-title", "job-import-description",
+            "save-job-import-btn",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260806-2", html_source)
-        self.assertIn("index.css?v=20260806-2", html_source)
+        self.assertIn("app.js?v=20260807-1", html_source)
+        self.assertIn("index.css?v=20260807-1", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -185,7 +193,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260806.2", source)
+                self.assertIn("20260807.1", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -261,6 +269,13 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn('result.pop("gemini_api_key"', app_source)
         self.assertIn('result.pop("google_maps_api_key"', app_source)
 
+    def test_manual_import_ui_preserves_unscored_jobs(self) -> None:
+        script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("/api/jobs/import/preview", script_source)
+        self.assertIn("/api/jobs/import", script_source)
+        self.assertIn('job.match_score === null', script_source)
+        self.assertIn('"Unscored"', script_source)
+
 
 class LocalBrowserBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -333,6 +348,190 @@ class LocalBrowserBoundaryTests(unittest.TestCase):
             stored = connection.execute("SELECT base_resume_text FROM profile WHERE id = 1").fetchone()[0]
             connection.close()
             self.assertEqual("Original resume", stored)
+
+
+class ManualJobImportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.database_path = Path(self.temp_dir.name) / "manual-import.db"
+        connection = sqlite3.connect(self.database_path)
+        connection.executescript("""
+            CREATE TABLE profile (
+                id INTEGER PRIMARY KEY, base_resume_text TEXT, gemini_api_key TEXT
+            );
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, company TEXT,
+                description TEXT, url TEXT UNIQUE, match_score INTEGER,
+                match_analysis TEXT, date_found TEXT, status TEXT, location TEXT,
+                work_arrangement TEXT, employment_type TEXT, compensation TEXT,
+                source TEXT, last_checked_at TEXT, is_expired INTEGER
+            );
+            INSERT INTO profile VALUES (1, 'Experienced data leader', 'test-key');
+        """)
+        connection.close()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def connection_factory(self):
+        connection = sqlite3.connect(self.database_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def test_preview_rejects_private_network_url_before_database_or_browser(self) -> None:
+        database = unittest.mock.Mock()
+        scraper = unittest.mock.Mock()
+        with (
+            patch.object(app_module, "get_db_connection", database),
+            patch.object(app_module, "scrape_job_details", scraper),
+            self.assertRaisesRegex(app_module.HTTPException, "Local, private-network"),
+        ):
+            app_module.preview_manual_job(
+                app_module.ManualJobPreviewRequest(url="http://127.0.0.1/jobs/private")
+            )
+        database.assert_not_called()
+        scraper.assert_not_called()
+
+    def test_preview_extracts_editable_fields_without_saving(self) -> None:
+        extracted = {
+            "title": "Data Director", "company": "Example Health",
+            "description": "Lead enterprise data strategy and analytics. " * 3,
+            "location": "Remote", "work_arrangement": "remote",
+            "employment_type": "full_time", "compensation": "$150,000 per year",
+        }
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "scrape_job_details", return_value=extracted),
+        ):
+            result = app_module.preview_manual_job(
+                app_module.ManualJobPreviewRequest(url="https://example.test/jobs/123?utm_source=email")
+            )
+
+        self.assertFalse(result["duplicate"])
+        self.assertTrue(result["extraction_succeeded"])
+        self.assertEqual("https://example.test/jobs/123", result["job"]["url"])
+        self.assertEqual("Data Director", result["job"]["title"])
+        connection = self.connection_factory()
+        self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+        connection.close()
+
+    def test_save_scores_and_inserts_reviewed_job(self) -> None:
+        request = app_module.ManualJobSaveRequest(
+            url="https://example.test/jobs/123", title="Data Director",
+            company="Example Health",
+            description="Lead enterprise data strategy and analytics. " * 3,
+            location="Remote", work_arrangement="remote", employment_type="full_time",
+            compensation="$150,000 per year",
+        )
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "analyze_job_match", return_value={
+                "success": True, "match_score": 88, "match_analysis": "Strong match."
+            }),
+        ):
+            result = app_module.save_manual_job(request)
+
+        self.assertEqual(88, result["match_score"])
+        connection = self.connection_factory()
+        stored = connection.execute("SELECT * FROM jobs WHERE id = ?", (result["job_id"],)).fetchone()
+        connection.close()
+        self.assertEqual("https://example.test/jobs/123", stored["url"])
+        self.assertEqual("example.test", stored["source"])
+        self.assertEqual("matched", stored["status"])
+
+    def test_duplicate_is_reported_before_scraping(self) -> None:
+        connection = self.connection_factory()
+        connection.execute(
+            "INSERT INTO jobs (title, company, description, url, status) VALUES (?, ?, ?, ?, ?)",
+            ("Existing", "Example", "Existing description", "https://example.test/jobs/123", "matched"),
+        )
+        connection.commit()
+        connection.close()
+        scraper = unittest.mock.Mock()
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "scrape_job_details", scraper),
+        ):
+            result = app_module.preview_manual_job(
+                app_module.ManualJobPreviewRequest(url="https://example.test/jobs/123?utm_campaign=test")
+            )
+        self.assertTrue(result["duplicate"])
+        scraper.assert_not_called()
+
+    def test_preview_uses_resolved_url_and_detects_redirect_duplicate(self) -> None:
+        connection = self.connection_factory()
+        connection.execute(
+            "INSERT INTO jobs (title, company, description, url, status) VALUES (?, ?, ?, ?, ?)",
+            ("Existing", "Example", "Existing description", "https://careers.example.test/jobs/123", "matched"),
+        )
+        connection.commit()
+        connection.close()
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "scrape_job_details", return_value={
+                "url": "https://careers.example.test/jobs/123",
+                "title": "Data Director",
+            }),
+        ):
+            result = app_module.preview_manual_job(
+                app_module.ManualJobPreviewRequest(url="https://example.test/apply/123")
+            )
+
+        self.assertTrue(result["duplicate"])
+        self.assertEqual("https://careers.example.test/jobs/123", result["job"]["url"])
+
+    def test_save_without_ai_key_keeps_job_visible_as_unscored(self) -> None:
+        connection = self.connection_factory()
+        connection.execute("UPDATE profile SET gemini_api_key = '' WHERE id = 1")
+        connection.commit()
+        connection.close()
+        matcher = unittest.mock.Mock()
+        request = app_module.ManualJobSaveRequest(
+            url="https://example.test/jobs/unscored", title="Operations Director",
+            company="Example Manufacturing",
+            description="Lead operations, safety, quality, and continuous improvement. " * 2,
+        )
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "analyze_job_match", matcher),
+        ):
+            result = app_module.save_manual_job(request)
+
+        self.assertIsNone(result["match_score"])
+        matcher.assert_not_called()
+        connection = self.connection_factory()
+        stored_score = connection.execute(
+            "SELECT match_score FROM jobs WHERE id = ?", (result["job_id"],)
+        ).fetchone()[0]
+        connection.close()
+        self.assertIsNone(stored_score)
+
+    def test_malformed_ai_result_does_not_prevent_save(self) -> None:
+        request = app_module.ManualJobSaveRequest(
+            url="https://example.test/jobs/malformed-ai", title="Operations Director",
+            company="Example Manufacturing",
+            description="Lead operations, safety, quality, and continuous improvement. " * 2,
+        )
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "analyze_job_match", return_value=None),
+        ):
+            result = app_module.save_manual_job(request)
+
+        self.assertIsNone(result["match_score"])
+        connection = self.connection_factory()
+        stored = connection.execute(
+            "SELECT id, match_score FROM jobs WHERE id = ?", (result["job_id"],)
+        ).fetchone()
+        connection.close()
+        self.assertIsNotNone(stored)
+        self.assertIsNone(stored["match_score"])
 
 
 class HeadquartersPreferenceTests(unittest.TestCase):
@@ -413,6 +612,68 @@ class SearchQualityTests(unittest.TestCase):
         base = "https://jobs.lever.co/example/abc-123"
         self.assertEqual(base, canonicalize_job_url(base + "/?source=linkedin#apply"))
 
+    def test_unknown_site_keeps_functional_query_but_removes_tracking(self) -> None:
+        self.assertEqual(
+            "https://careers.example.test/opening?job=123",
+            canonicalize_job_url(
+                "https://careers.example.test/opening?utm_source=email&job=123#apply"
+            ),
+        )
+
+    def test_public_url_validation_blocks_local_and_private_addresses(self) -> None:
+        for url in (
+            "http://127.0.0.1/job", "http://localhost/job",
+            "http://10.10.1.4/job", "http://169.254.169.254/latest/meta-data",
+            "file:///etc/passwd",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(is_public_http_url(url))
+
+    @patch("searcher.socket.getaddrinfo")
+    def test_public_url_validation_requires_only_global_dns_results(self, getaddrinfo) -> None:
+        getaddrinfo.return_value = [
+            (2, 1, 6, "", ("93.184.216.34", 443)),
+        ]
+        self.assertTrue(is_public_http_url("https://jobs.example.test/opening"))
+        getaddrinfo.return_value = [
+            (2, 1, 6, "", ("93.184.216.34", 443)),
+            (2, 1, 6, "", ("127.0.0.1", 443)),
+        ]
+        self.assertFalse(is_public_http_url("https://mixed.example.test/opening"))
+
+    @patch("searcher.socket.getaddrinfo")
+    def test_browser_route_guard_blocks_private_redirects_and_subresources(self, getaddrinfo) -> None:
+        getaddrinfo.return_value = [(2, 1, 6, "", ("93.184.216.34", 443))]
+
+        class FakeContext:
+            handler = None
+
+            def route(self, pattern, handler):
+                self.handler = handler
+
+        class FakeRoute:
+            continued = False
+            aborted = False
+
+            def continue_(self):
+                self.continued = True
+
+            def abort(self, reason):
+                self.aborted = reason == "blockedbyclient"
+
+        class FakeRequest:
+            def __init__(self, url):
+                self.url = url
+
+        context = FakeContext()
+        _protect_browser_network(context)
+        public_route = FakeRoute()
+        private_route = FakeRoute()
+        context.handler(public_route, FakeRequest("https://assets.example.test/app.js"))
+        context.handler(private_route, FakeRequest("http://127.0.0.1/private"))
+        self.assertTrue(public_route.continued)
+        self.assertTrue(private_route.aborted)
+
     def test_browser_error_page_is_not_useful_job_content(self) -> None:
         self.assertFalse(is_useful_job_details({
             "title": "Sorry, Internet Explorer 11 is no longer supported by SmartRecruiters",
@@ -434,6 +695,71 @@ class SearchQualityTests(unittest.TestCase):
         self.assertEqual("remote", metadata["work_arrangement"])
         self.assertEqual("full_time", metadata["employment_type"])
         self.assertIn("$120,000", metadata["compensation"])
+
+    def test_json_ld_location_normalizes_structured_country_values(self) -> None:
+        posting = {
+            "jobLocation": [
+                {
+                    "@type": "Place",
+                    "address": {
+                        "@type": "PostalAddress",
+                        "addressLocality": "Los Angeles, CA,US",
+                        "addressRegion": "CA",
+                        "addressCountry": {"@type": "Country", "name": "US"},
+                    },
+                },
+                {
+                    "@type": "Place",
+                    "address": {
+                        "addressLocality": "Dayton",
+                        "addressRegion": "OH",
+                        "addressCountry": {"@type": "Country", "name": "US"},
+                    },
+                },
+            ]
+        }
+
+        self.assertEqual(
+            "Los Angeles, CA, US; Dayton, OH, US",
+            _job_location_from_json_ld(posting),
+        )
+
+    def test_popular_job_board_structured_metadata_shapes_are_normalized(self) -> None:
+        samples = {
+            "ziprecruiter": ({
+                "employmentType": "PART_TIME",
+                "baseSalary": {
+                    "@type": "MonetaryAmount", "currency": "USD",
+                    "value": {"@type": "QuantitativeValue", "minValue": 18, "maxValue": 20, "unitText": "HOUR"},
+                },
+            }, {"work_arrangement": "", "employment_type": "part_time", "compensation": "USD 18–20 per hour"}),
+            "glassdoor": ({
+                "employmentType": ["FULL_TIME"], "jobLocationType": "TELECOMMUTE",
+                "estimatedSalary": {
+                    "@type": "MonetaryAmount", "currency": "USD",
+                    "value": {"@type": "QuantitativeValue", "minValue": 77447, "maxValue": 113374, "unitText": "YEAR"},
+                },
+            }, {"work_arrangement": "remote", "employment_type": "full_time", "compensation": "USD 77,447–113,374 per year"}),
+            "dice": ({
+                "employmentType": "CONTRACTOR", "jobLocationType": "TELECOMMUTE",
+                "baseSalary": {"@type": "MonetaryAmount", "currency": "USD", "minValue": 70, "maxValue": 85},
+            }, {"work_arrangement": "remote", "employment_type": "contract", "compensation": "USD 70–85"}),
+        }
+
+        for platform, (posting, expected) in samples.items():
+            with self.subTest(platform=platform):
+                self.assertEqual(expected, _structured_job_metadata(posting))
+
+    def test_remote_applicant_location_is_used_when_job_location_is_absent(self) -> None:
+        posting = {
+            "jobLocationType": "TELECOMMUTE",
+            "applicantLocationRequirements": [
+                {"@type": "Country", "name": "USA"},
+                {"@type": "AdministrativeArea", "name": "District of Columbia"},
+            ],
+        }
+
+        self.assertEqual("USA; District of Columbia", _job_location_from_json_ld(posting))
 
     def test_provider_format_drift_creates_user_alert(self) -> None:
         health = {"ashby": {"raw_candidates": 4, "valid_discovered": 4, "new_candidates": 3, "accepted": 0, "errors": []}}

@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260806-2">
+    <link rel="stylesheet" href="/static/index.css?v=20260807-1">
 </head>
 <body>
     <div class="app-container">
@@ -278,6 +278,9 @@
                     <div class="card-header justify-between">
                         <h2>Discovered Job Postings</h2>
                         <div class="header-actions">
+                            <button class="btn btn-primary btn-sm" id="open-job-import-btn">
+                                <i class="fa-solid fa-link"></i> Add Job by URL
+                            </button>
                             <button class="btn btn-secondary btn-sm" id="cleanup-jobs-btn">
                                 <i class="fa-solid fa-broom"></i> Clean Up
                             </button>
@@ -376,6 +379,82 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <!-- Manual job import -->
+    <div class="modal" id="job-import-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add Job Posting by URL</h2>
+                <button type="button" class="close-modal-btn" id="close-job-import-modal" aria-label="Close job import"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="job-import-form">
+                <div class="modal-body">
+                    <p class="text-muted margin-bottom-md">Paste a public job-posting URL. Job Applier will extract what it can, then let you review every field before saving.</p>
+                    <div class="job-import-url-row">
+                        <div class="form-group flex-grow">
+                            <label for="job-import-url">Job posting URL</label>
+                            <input type="url" id="job-import-url" maxlength="2048" required placeholder="https://employer.example/jobs/role-id">
+                        </div>
+                        <button type="button" class="btn btn-secondary" id="preview-job-import-btn">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Preview Details
+                        </button>
+                    </div>
+                    <div class="provider-alerts margin-top-sm" id="job-import-message" hidden></div>
+                    <div id="job-import-fields" class="form-grid margin-top-sm" hidden>
+                        <div class="form-group">
+                            <label for="job-import-company">Company</label>
+                            <input type="text" id="job-import-company" maxlength="180" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="job-import-title">Position</label>
+                            <input type="text" id="job-import-title" maxlength="180" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="job-import-location">Location</label>
+                            <input type="text" id="job-import-location" maxlength="240" placeholder="City, state, country, or Remote">
+                        </div>
+                        <div class="form-group">
+                            <label for="job-import-compensation">Compensation</label>
+                            <input type="text" id="job-import-compensation" maxlength="160" placeholder="$120,000–$150,000 per year">
+                        </div>
+                        <div class="form-group">
+                            <label for="job-import-work-arrangement">Work arrangement</label>
+                            <select id="job-import-work-arrangement">
+                                <option value="">Not specified</option>
+                                <option value="remote">Remote</option>
+                                <option value="hybrid">Hybrid</option>
+                                <option value="on_site">On site</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="job-import-employment-type">Employment type</label>
+                            <select id="job-import-employment-type">
+                                <option value="">Not specified</option>
+                                <option value="full_time">Full time</option>
+                                <option value="part_time">Part time</option>
+                                <option value="contract">Contract</option>
+                                <option value="temporary">Temporary</option>
+                                <option value="internship">Internship</option>
+                            </select>
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="job-import-description">Job description</label>
+                            <textarea id="job-import-description" rows="10" maxlength="50000" minlength="20" required placeholder="Paste or correct the responsibilities and requirements when extraction is incomplete."></textarea>
+                            <p class="form-help">Required for match analysis and resume tailoring.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" id="cancel-job-import-btn">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="save-job-import-btn" disabled>
+                            <i class="fa-solid fa-floppy-disk"></i> Save Job
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
     </div>
 
     <!-- Untouched Jobs Cleanup Preview -->
@@ -573,6 +652,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260806-2"></script>
+    <script src="/static/app.js?v=20260807-1"></script>
 </body>
 </html>

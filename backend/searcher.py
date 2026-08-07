@@ -1,4 +1,8 @@
+import html
+import ipaddress
+import json
 import re
+import socket
 import urllib.parse
 import urllib.request
 from playwright.sync_api import sync_playwright
@@ -9,6 +13,10 @@ from tailor import analyze_job_match, analyze_job_matches_batch
 from datetime import datetime
 
 MIN_MATCH_SCORE = 40
+MAX_JOB_DESCRIPTION_CHARS = 50_000
+TRACKING_QUERY_KEYS = {
+    "fbclid", "gclid", "mc_cid", "mc_eid", "ref", "referrer", "source",
+}
 PROVIDER_DOMAINS = {
     "greenhouse": "greenhouse.io",
     "lever": "lever.co",
@@ -29,21 +37,37 @@ INVALID_JOB_TEXT = (
 
 
 def canonicalize_job_url(url: str) -> str:
-    """Remove tracking/query variants so one posting has one stable identity."""
+    """Normalize a web posting URL while preserving unknown-site identifiers."""
     try:
         parsed = urllib.parse.urlsplit(url.strip())
-        host = (parsed.hostname or "").lower()
-        if not host:
+        scheme = parsed.scheme.lower()
+        host = (parsed.hostname or "").encode("idna").decode("ascii").lower()
+        if scheme not in {"http", "https"} or not host or parsed.username or parsed.password:
             return ""
+        port = parsed.port
+        default_port = 443 if scheme == "https" else 80
+        display_host = f"[{host}]" if ":" in host else host
+        netloc = display_host if port in {None, default_port} else f"{display_host}:{port}"
         path = "/" + "/".join(segment for segment in parsed.path.split("/") if segment)
-        return urllib.parse.urlunsplit(("https", host, path.rstrip("/"), "", ""))
+        normalized_path = path.rstrip("/") or "/"
+
+        provider = provider_for_url(urllib.parse.urlunsplit((scheme, netloc, normalized_path, "", "")))
+        query = ""
+        if provider == "unknown" and parsed.query:
+            retained = [
+                (key, value)
+                for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+                if not key.lower().startswith("utm_") and key.lower() not in TRACKING_QUERY_KEYS
+            ]
+            query = urllib.parse.urlencode(sorted(retained))
+        return urllib.parse.urlunsplit((scheme, netloc, normalized_path, query, ""))
     except Exception:
         return ""
 
 
 def provider_for_url(url: str) -> str:
     host = (urllib.parse.urlparse(url).hostname or "").lower()
-    if "greenhouse.io" in host:
+    if host == "greenhouse.io" or host.endswith(".greenhouse.io"):
         return "greenhouse"
     if host == "jobs.lever.co":
         return "lever"
@@ -52,6 +76,208 @@ def provider_for_url(url: str) -> str:
     if host == "jobs.smartrecruiters.com":
         return "smartrecruiters"
     return "unknown"
+
+
+def validate_public_http_url(url: str, dns_cache: dict | None = None) -> tuple[bool, str]:
+    """Require an HTTP(S) URL whose complete DNS result stays on the public Internet."""
+    canonical_url = canonicalize_job_url(url)
+    if not canonical_url:
+        return False, "Enter a complete HTTP or HTTPS job-posting URL."
+    parsed = urllib.parse.urlsplit(canonical_url)
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return False, "The URL contains an invalid port."
+    if port not in {80, 443}:
+        return False, "Job-posting URLs must use the standard HTTP or HTTPS port."
+
+    hostname = parsed.hostname or ""
+    cache_key = (hostname, port)
+    if dns_cache is not None and cache_key in dns_cache:
+        return dns_cache[cache_key]
+    try:
+        addresses = {ipaddress.ip_address(hostname)}
+    except ValueError:
+        try:
+            addresses = {
+                ipaddress.ip_address(item[4][0])
+                for item in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+            }
+        except (OSError, ValueError):
+            result = (False, "The job-posting hostname could not be resolved.")
+            if dns_cache is not None:
+                dns_cache[cache_key] = result
+            return result
+
+    result = (
+        (True, "")
+        if addresses and all(address.is_global for address in addresses)
+        else (False, "Local, private-network, and reserved addresses are not allowed.")
+    )
+    if dns_cache is not None:
+        dns_cache[cache_key] = result
+    return result
+
+
+def is_public_http_url(url: str, dns_cache: dict | None = None) -> bool:
+    """Boolean convenience wrapper for request-routing checks."""
+    return validate_public_http_url(url, dns_cache)[0]
+
+
+def _protect_browser_network(context) -> None:
+    """Block redirects and subresources that leave the public HTTP(S) network."""
+    dns_cache = {}
+
+    def route_request(route, request) -> None:
+        if is_public_http_url(request.url, dns_cache):
+            route.continue_()
+        else:
+            route.abort("blockedbyclient")
+
+    context.route("**/*", route_request)
+
+
+def _plain_text(value: object) -> str:
+    """Convert JSON-LD or HTML text into a compact human-editable string."""
+    if isinstance(value, list):
+        value = "\n".join(_plain_text(item) for item in value)
+    elif isinstance(value, dict):
+        value = next((
+            _plain_text(value.get(key))
+            for key in ("name", "@value", "text", "value")
+            if _plain_text(value.get(key))
+        ), "")
+    if not isinstance(value, str):
+        return ""
+    without_tags = re.sub(r"<[^>]+>", " ", value)
+    return " ".join(html.unescape(without_tags).split())
+
+
+def _job_posting_json_ld(page) -> dict:
+    """Return the first JobPosting object found in page JSON-LD."""
+    def candidates(value):
+        if isinstance(value, list):
+            for item in value:
+                yield from candidates(item)
+        elif isinstance(value, dict):
+            posting_types = value.get("@type") or []
+            if isinstance(posting_types, str):
+                posting_types = [posting_types]
+            if "JobPosting" in posting_types:
+                yield value
+            if "@graph" in value:
+                yield from candidates(value["@graph"])
+
+    for element in page.query_selector_all('script[type="application/ld+json"]'):
+        try:
+            parsed = json.loads(element.text_content() or "")
+            posting = next(candidates(parsed), None)
+            if posting:
+                return posting
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return {}
+
+
+def _job_location_from_json_ld(posting: dict) -> str:
+    def address_part(value: object) -> str:
+        if isinstance(value, str):
+            return _plain_text(value)
+        if isinstance(value, dict):
+            for key in ("name", "value", "code"):
+                normalized = address_part(value.get(key))
+                if normalized:
+                    return normalized
+        if isinstance(value, list):
+            return ", ".join(part for item in value if (part := address_part(item)))
+        return ""
+
+    locations = posting.get("jobLocation") or []
+    if isinstance(locations, dict):
+        locations = [locations]
+    values = []
+    for location in locations:
+        if isinstance(location, str):
+            values.append(_plain_text(location))
+            continue
+        address = location.get("address", {}) if isinstance(location, dict) else {}
+        if isinstance(address, str):
+            values.append(address)
+        elif isinstance(address, dict):
+            parts = []
+            seen_parts = set()
+            for key in ("addressLocality", "addressRegion", "postalCode", "addressCountry"):
+                component = address_part(address.get(key))
+                for part in component.split(","):
+                    part = part.strip()
+                    normalized = part.casefold()
+                    if part and normalized not in seen_parts:
+                        parts.append(part)
+                        seen_parts.add(normalized)
+            values.append(", ".join(parts))
+        if not values[-1] and isinstance(location, dict):
+            values[-1] = _plain_text(location.get("name"))
+
+    if not any(values):
+        requirements = posting.get("applicantLocationRequirements") or []
+        if not isinstance(requirements, list):
+            requirements = [requirements]
+        values = [_plain_text(requirement) for requirement in requirements]
+    return "; ".join(value for value in values if value)
+
+
+def _format_salary_number(value: object) -> str:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return ""
+    return f"{value:,.2f}".rstrip("0").rstrip(".")
+
+
+def _compensation_from_json_ld(posting: dict) -> str:
+    """Normalize common Schema.org salary variants without exposing objects."""
+    salary = posting.get("baseSalary") or posting.get("estimatedSalary")
+    if isinstance(salary, (int, float)) and not isinstance(salary, bool):
+        amount = _format_salary_number(salary)
+        currency = _plain_text(posting.get("salaryCurrency"))
+        return " ".join(value for value in (currency, amount) if value)
+    if not isinstance(salary, dict):
+        return ""
+
+    currency = _plain_text(salary.get("currency")) or _plain_text(posting.get("salaryCurrency"))
+    value = salary.get("value", salary)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        minimum = maximum = _format_salary_number(value)
+        unit = ""
+    elif isinstance(value, dict):
+        minimum = _format_salary_number(value.get("minValue", value.get("minPrice")))
+        maximum = _format_salary_number(value.get("maxValue", value.get("maxPrice")))
+        exact = _format_salary_number(value.get("value", value.get("price")))
+        minimum = minimum or exact
+        maximum = maximum or exact
+        unit = _plain_text(value.get("unitText"))
+    else:
+        return ""
+
+    amount = f"{minimum}–{maximum}" if minimum and maximum and minimum != maximum else minimum or maximum
+    if not amount:
+        return ""
+    unit_labels = {"HOUR": "per hour", "DAY": "per day", "WEEK": "per week", "MONTH": "per month", "YEAR": "per year"}
+    unit = unit_labels.get(unit.upper(), unit.lower()) if unit else ""
+    return " ".join(value for value in (currency, amount, unit) if value)[:160]
+
+
+def _structured_job_metadata(posting: dict) -> dict:
+    location_type = _plain_text(posting.get("jobLocationType")).lower()
+    employment = _plain_text(posting.get("employmentType")).lower().replace("_", " ").replace("-", " ")
+    employment_aliases = (
+        ("full time", "full_time"), ("part time", "part_time"),
+        ("contract", "contract"), ("temporary", "temporary"),
+        ("intern", "internship"),
+    )
+    return {
+        "work_arrangement": "remote" if "telecommute" in location_type or "remote" in location_type else "",
+        "employment_type": next((normalized for marker, normalized in employment_aliases if marker in employment), ""),
+        "compensation": _compensation_from_json_ld(posting),
+    }
 
 
 def _largest_text(page, selectors: str) -> str:
@@ -284,7 +510,7 @@ def extract_search_keywords_from_resume(resume_text: str, api_key: str = None) -
         print(f"Error extracting keywords from resume: {e}")
         return ["Software Engineer"]
 
-def scrape_job_details(url: str) -> dict:
+def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
     """
     Launches a headless browser via Playwright and scrapes the job details
     (title, company name, description, and link) from the target job board.
@@ -297,6 +523,11 @@ def scrape_job_details(url: str) -> dict:
               or an empty dictionary if the posting is closed or invalid.
     """
     url = canonicalize_job_url(url)
+    is_public, _ = validate_public_http_url(url)
+    if not is_public:
+        return {}
+    provider = provider_for_url(url)
+    hostname = (urllib.parse.urlsplit(url).hostname or "").removeprefix("www.")
     details = {
         "title": "",
         "company": "",
@@ -306,7 +537,7 @@ def scrape_job_details(url: str) -> dict:
         "work_arrangement": "",
         "employment_type": "",
         "compensation": "",
-        "source": provider_for_url(url),
+        "source": provider if provider != "unknown" else hostname,
     }
     
     with sync_playwright() as p:
@@ -315,9 +546,17 @@ def scrape_job_details(url: str) -> dict:
             viewport={"width": 1280, "height": 800},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
         )
+        _protect_browser_network(context)
         page = context.new_page()
         try:
-            page.goto(url, timeout=20000)
+            response = page.goto(url, timeout=20000, wait_until="domcontentloaded")
+            if response and response.status >= 400:
+                return {}
+            if not is_public_http_url(page.url):
+                return {}
+            final_url = canonicalize_job_url(page.url)
+            if final_url:
+                details["url"] = final_url
             
             # Wait for content or title elements to load dynamically
             try:
@@ -432,6 +671,28 @@ def scrape_job_details(url: str) -> dict:
                 details["description"] = desc_text
                 location_match = re.search(r"(?im)^Location\s*\n+([^\n]+)", body_text)
                 details["location"] = location_match.group(1).strip() if location_match else ""
+
+            else:
+                posting = _job_posting_json_ld(page)
+                organization = posting.get("hiringOrganization") or {}
+                title_element = page.query_selector("h1")
+                description = _plain_text(posting.get("description"))
+                if not description:
+                    description = _largest_text(
+                        page,
+                        "[class*='job-description'], [id*='job-description'], main, article",
+                    )
+                details["title"] = _plain_text(posting.get("title")) or (
+                    title_element.inner_text().strip() if title_element else ""
+                )
+                details["company"] = _plain_text(organization)
+                if not details["company"]:
+                    site_name = page.query_selector('meta[property="og:site_name"]')
+                    details["company"] = (site_name.get_attribute("content") or "").strip() if site_name else ""
+                details["description"] = description
+                details["location"] = _job_location_from_json_ld(posting)
+                for key, value in _structured_job_metadata(posting).items():
+                    details[key] = value or details.get(key, "")
                 
         except Exception as e:
             print(f"Error scraping details from {url}: {e}")
@@ -439,11 +700,17 @@ def scrape_job_details(url: str) -> dict:
         finally:
             browser.close()
             
+    details["title"] = " ".join(details["title"].split())[:180]
+    details["company"] = " ".join(details["company"].split())[:180]
+    details["location"] = " ".join(details["location"].split())[:240]
+    details["description"] = details["description"].strip()[:MAX_JOB_DESCRIPTION_CHARS]
     metadata = _metadata_from_text(f"{details['title']}\n{details['location']}\n{details['description'][:2500]}")
     for key, value in metadata.items():
         details[key] = details.get(key) or value
 
     # Reject generic/error pages and content that cannot support a real match.
+    if allow_partial and any(details.get(key) for key in ("title", "company", "description")):
+        return details
     if not is_useful_job_details(details):
         return {}
         

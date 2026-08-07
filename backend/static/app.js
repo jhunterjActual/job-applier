@@ -12,6 +12,7 @@ let lifecycleJobId = null;
 let geminiKeyConfigured = false;
 let googleMapsKeyConfigured = false;
 let loadedJobs = [];
+let jobImportCanonicalUrl = null;
 
 // DOM Elements
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -55,6 +56,21 @@ const jobStatusFilter = document.getElementById("job-status-filter");
 const jobSortOrder = document.getElementById("job-sort-order");
 const providerAlerts = document.getElementById("provider-alerts");
 const savedSearchAlerts = document.getElementById("saved-search-alerts");
+const openJobImportBtn = document.getElementById("open-job-import-btn");
+const jobImportModal = document.getElementById("job-import-modal");
+const jobImportForm = document.getElementById("job-import-form");
+const jobImportUrl = document.getElementById("job-import-url");
+const jobImportFields = document.getElementById("job-import-fields");
+const jobImportMessage = document.getElementById("job-import-message");
+const previewJobImportBtn = document.getElementById("preview-job-import-btn");
+const saveJobImportBtn = document.getElementById("save-job-import-btn");
+const jobImportCompany = document.getElementById("job-import-company");
+const jobImportTitle = document.getElementById("job-import-title");
+const jobImportLocation = document.getElementById("job-import-location");
+const jobImportCompensation = document.getElementById("job-import-compensation");
+const jobImportWorkArrangement = document.getElementById("job-import-work-arrangement");
+const jobImportEmploymentType = document.getElementById("job-import-employment-type");
+const jobImportDescription = document.getElementById("job-import-description");
 
 // Logs Elements
 const refreshLogsBtn = document.getElementById("refresh-logs-btn");
@@ -109,6 +125,12 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(searchForm, "submit", searchJobs);
     bindEvent(refreshJobsBtn, "click", loadJobs);
     bindEvent(cleanupJobsBtn, "click", showCleanupPreview);
+    bindEvent(openJobImportBtn, "click", showJobImportModal);
+    bindEvent(previewJobImportBtn, "click", previewJobImport);
+    bindEvent(jobImportForm, "submit", saveJobImport);
+    bindEvent(jobImportUrl, "input", invalidateJobImportPreview);
+    bindEvent(document.getElementById("close-job-import-modal"), "click", hideJobImportModal);
+    bindEvent(document.getElementById("cancel-job-import-btn"), "click", hideJobImportModal);
     bindEvent(refreshLogsBtn, "click", loadLogs);
     
     // Modal controls
@@ -400,6 +422,116 @@ function hideCleanupModal() {
     if (cleanupActionEnableTimer) clearTimeout(cleanupActionEnableTimer);
 }
 
+function showJobImportMessage(message, isWarning = false) {
+    jobImportMessage.replaceChildren(createElement("strong", "", isWarning ? "Review needed" : "Preview ready"));
+    jobImportMessage.appendChild(createElement("p", "margin-top-sm", message));
+    jobImportMessage.hidden = false;
+}
+
+function showJobImportModal() {
+    jobImportForm.reset();
+    jobImportCanonicalUrl = null;
+    jobImportFields.hidden = true;
+    jobImportMessage.hidden = true;
+    saveJobImportBtn.disabled = true;
+    jobImportModal.classList.add("active");
+    jobImportUrl.focus();
+}
+
+function hideJobImportModal() {
+    jobImportModal.classList.remove("active");
+    jobImportCanonicalUrl = null;
+}
+
+function invalidateJobImportPreview() {
+    if (!jobImportCanonicalUrl) return;
+    jobImportCanonicalUrl = null;
+    jobImportFields.hidden = true;
+    jobImportMessage.hidden = true;
+    saveJobImportBtn.disabled = true;
+}
+
+async function previewJobImport() {
+    const url = jobImportUrl.value.trim();
+    if (!url) {
+        jobImportUrl.reportValidity();
+        return;
+    }
+    showLoading("Previewing Job Posting...", "Validating the public URL and extracting available job details.");
+    try {
+        const response = await fetch(`${API_URL}/api/jobs/import/preview`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url })
+        });
+        const result = await response.json();
+        hideLoading();
+        if (!response.ok) throw new Error(result.detail || "Could not preview this posting.");
+        if (result.duplicate) {
+            const existing = result.existing_job || {};
+            jobImportCanonicalUrl = null;
+            jobImportFields.hidden = true;
+            saveJobImportBtn.disabled = true;
+            showJobImportMessage(`This URL is already saved as job #${existing.id}: ${existing.company || "Unknown company"} — ${existing.title || "Untitled role"}.`, true);
+            return;
+        }
+
+        const job = result.job || {};
+        jobImportCanonicalUrl = job.url;
+        jobImportUrl.value = job.url || url;
+        jobImportCompany.value = job.company || "";
+        jobImportTitle.value = job.title || "";
+        jobImportLocation.value = job.location || "";
+        jobImportCompensation.value = job.compensation || "";
+        jobImportWorkArrangement.value = job.work_arrangement || "";
+        jobImportEmploymentType.value = job.employment_type || "";
+        jobImportDescription.value = job.description || "";
+        jobImportFields.hidden = false;
+        saveJobImportBtn.disabled = false;
+        showJobImportMessage(result.message, !result.extraction_succeeded);
+        const firstMissing = [jobImportCompany, jobImportTitle, jobImportDescription].find(field => !field.value.trim());
+        if (firstMissing) firstMissing.focus();
+    } catch (error) {
+        hideLoading();
+        jobImportCanonicalUrl = null;
+        jobImportFields.hidden = true;
+        saveJobImportBtn.disabled = true;
+        showJobImportMessage(error.message, true);
+    }
+}
+
+async function saveJobImport(event) {
+    event.preventDefault();
+    if (!jobImportCanonicalUrl || !jobImportForm.reportValidity()) return;
+    showLoading("Saving Job Posting...", "Saving the reviewed details and analyzing the match when AI is configured.");
+    try {
+        const response = await fetch(`${API_URL}/api/jobs/import`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                url: jobImportCanonicalUrl,
+                company: jobImportCompany.value.trim(),
+                title: jobImportTitle.value.trim(),
+                description: jobImportDescription.value.trim(),
+                location: jobImportLocation.value.trim(),
+                compensation: jobImportCompensation.value.trim(),
+                work_arrangement: jobImportWorkArrangement.value,
+                employment_type: jobImportEmploymentType.value
+            })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not save this posting.");
+        hideLoading();
+        hideJobImportModal();
+        await Promise.all([loadJobs(), updateDashboardStats()]);
+        logActivity("Job Imported", `Saved manually added job #${result.job_id}.`, "success");
+        alert(result.message);
+    } catch (error) {
+        hideLoading();
+        showJobImportMessage(error.message, true);
+    }
+}
+
 async function showCleanupPreview() {
     showLoading("Preparing Cleanup Preview...", "Counting only matched jobs with no application history or generated materials.");
     try {
@@ -670,7 +802,7 @@ function renderFilteredJobs() {
     jobsTableBody.replaceChildren();
     const minimumScore = Number(jobMinScore?.value || 40);
     const statusFilter = jobStatusFilter?.value || "";
-    let jobs = loadedJobs.filter(job => Number(job.match_score) >= minimumScore);
+    let jobs = loadedJobs.filter(job => job.match_score === null || Number(job.match_score) >= minimumScore);
     if (statusFilter === "applied") {
         jobs = jobs.filter(job => ["applied", "interview", "offer", "rejected", "withdrawn", "closed"].includes(job.status));
     } else if (statusFilter) {
@@ -681,7 +813,7 @@ function renderFilteredJobs() {
         ? String(a.company).localeCompare(String(b.company))
         : order === "newest"
             ? String(b.date_found || "").localeCompare(String(a.date_found || ""))
-            : Number(b.match_score) - Number(a.match_score));
+            : Number(b.match_score ?? -1) - Number(a.match_score ?? -1));
     const resultCount = document.getElementById("job-result-count");
     if (resultCount) resultCount.textContent = `${jobs.length} of ${loadedJobs.length} jobs`;
 
@@ -717,10 +849,11 @@ function buildJobRow(job) {
     detailParts.forEach(part => detailsCell.appendChild(createElement("span", "", String(part))));
     tr.appendChild(detailsCell);
 
-    const score = Number(job.match_score) || 0;
-    const scoreClass = score >= 80 ? "high" : score >= 50 ? "medium" : "low";
+    const hasScore = job.match_score !== null && job.match_score !== undefined;
+    const score = hasScore ? Number(job.match_score) : null;
+    const scoreClass = !hasScore ? "unscored" : score >= 80 ? "high" : score >= 50 ? "medium" : "low";
     const scoreCell = createElement("td");
-    scoreCell.appendChild(createElement("span", `match-badge ${scoreClass}`, `${score}%`));
+    scoreCell.appendChild(createElement("span", `match-badge ${scoreClass}`, hasScore ? `${score}%` : "Unscored"));
     tr.appendChild(scoreCell);
 
     const linkCell = createElement("td");
