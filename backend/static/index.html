@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-5">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-7">
 </head>
 <body>
     <div class="app-container">
@@ -215,17 +215,30 @@
                                     </div>
                                 </div>
                                 <div class="form-group full-width">
-                                    <label for="p-google-apikey">Google Maps API Key (Optional)</label>
+                                    <label for="p-maps-provider">Headquarters address provider</label>
+                                    <select id="p-maps-provider">
+                                        <option value="openstreetmap" selected>OpenStreetMap Nominatim</option>
+                                        <option value="google">Google Places</option>
+                                    </select>
+                                    <small class="form-help">Used only for user-triggered employer headquarters lookups during tailoring.</small>
+                                </div>
+                                <div class="form-group full-width" id="google-maps-key-group">
+                                    <label for="p-google-apikey">Google Places API Key</label>
                                     <div class="password-input-container">
-                                        <input type="password" id="p-google-apikey" placeholder="Enter Google Maps API Key to conserve Gemini quota" aria-describedby="p-google-key-status p-google-key-help">
-                                        <button type="button" class="toggle-password" id="toggle-google-api-visibility">
+                                        <input type="password" id="p-google-apikey" autocomplete="off" placeholder="Enter Google Places API key" aria-describedby="p-google-key-status p-google-key-help">
+                                        <button type="button" class="toggle-password" id="toggle-google-api-visibility" aria-label="Show or hide Google Places API key">
                                             <i class="fa-solid fa-eye"></i>
                                         </button>
                                     </div>
                                     <div class="secret-key-meta">
                                         <span class="secret-key-status checking" id="p-google-key-status" role="status" aria-live="polite">Checking saved status…</span>
-                                        <small class="form-help" id="p-google-key-help">Uses the Google Places API for headquarters street address resolution if provided.</small>
+                                        <small class="form-help" id="p-google-key-help">Required when Google Places is selected. The key stays on this machine.</small>
                                     </div>
+                                </div>
+                                <div class="form-group full-width provider-policy" id="openstreetmap-policy" hidden>
+                                    <strong>OpenStreetMap public-service limits</strong>
+                                    <small class="form-help">Job Applier identifies its requests, limits lookups to one per second, and caches successful results. Do not use this option for bulk lookups. Data © OpenStreetMap contributors.</small>
+                                    <small class="form-help"><a href="https://operations.osmfoundation.org/policies/nominatim/" target="_blank" rel="noopener noreferrer">Nominatim usage policy</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap copyright</a></small>
                                 </div>
                                 <div class="form-group full-width">
                                     <label>
@@ -238,11 +251,15 @@
                                     <button type="button" class="btn btn-secondary" id="test-ai-provider-btn" disabled>
                                         <i class="fa-solid fa-plug-circle-check"></i> Test Saved AI Provider
                                     </button>
+                                    <button type="button" class="btn btn-secondary" id="test-maps-provider-btn" disabled>
+                                        <i class="fa-solid fa-map-location-dot"></i> Test Saved Maps Provider
+                                    </button>
                                     <button type="submit" class="btn btn-primary" id="save-profile-btn">
                                         <i class="fa-solid fa-floppy-disk"></i> Save Settings
                                     </button>
                                 </div>
                                 <p class="form-help full-width provider-test-status" id="ai-provider-test-status" role="status" aria-live="polite">Save provider, model, and key changes before testing.</p>
+                                <p class="form-help full-width provider-test-status" id="maps-provider-test-status" role="status" aria-live="polite">Save maps-provider and key changes before testing.</p>
                             </form>
                         </div>
                     </div>
@@ -745,6 +762,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-5"></script>
+    <script src="/static/app.js?v=20260808-7"></script>
 </body>
 </html>

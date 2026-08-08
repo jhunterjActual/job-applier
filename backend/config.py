@@ -20,6 +20,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+NOMINATIM_BASE_URL = os.environ.get("NOMINATIM_BASE_URL", "https://nominatim.openstreetmap.org")
 
 def get_gemini_api_key() -> str:
     """
@@ -43,3 +44,8 @@ def get_google_maps_api_key() -> str:
         str: The Google Maps API key, or empty string if not configured.
     """
     return os.environ.get("GOOGLE_MAPS_API_KEY") or GOOGLE_MAPS_API_KEY
+
+
+def get_nominatim_base_url() -> str:
+    """Return the configurable Nominatim endpoint for public or self-hosted use."""
+    return os.environ.get("NOMINATIM_BASE_URL") or NOMINATIM_BASE_URL

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import app as app_module
 import ai_providers as ai_providers_module
+import maps_providers as maps_providers_module
 import database as database_module
 import materials as materials_module
 import operations as operations_module
@@ -21,6 +22,13 @@ from fastapi.testclient import TestClient
 from ai_providers import AIProviderError, AIProviderSettings, CapabilityResponse, generate_structured, settings_from_profile
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from materials import material_download_name, persist_cover_letter, resolve_output_file
+from maps_providers import (
+    HeadquartersResult,
+    MapsProviderSettings,
+    lookup_headquarters,
+    maps_provider_ready,
+    resolve_headquarters,
+)
 from database import get_db_connection
 from dependency_lock import (
     dependency_fingerprint,
@@ -154,6 +162,146 @@ class AIProviderAbstractionTests(unittest.TestCase):
         settings = provider_call.call_args.args[0]
         self.assertEqual("openai", settings.provider)
         self.assertEqual("gpt-5-mini", settings.model)
+
+
+class MapsProviderAbstractionTests(unittest.TestCase):
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return json.dumps(self.payload).encode("utf-8")
+
+    def test_google_places_uses_current_post_api_and_keeps_key_out_of_url_and_body(self) -> None:
+        response = self.FakeResponse({
+            "places": [{
+                "formattedAddress": "1600 Amphitheatre Parkway, Mountain View, CA 94043, United States",
+                "addressComponents": [{"shortText": "US", "types": ["country"]}],
+            }],
+        })
+        with patch.object(maps_providers_module.urllib.request, "urlopen", return_value=response) as open_url:
+            result = lookup_headquarters(
+                MapsProviderSettings("google", "private-maps-key"),
+                "Example Co",
+                prefer_us=True,
+            )
+
+        request = open_url.call_args.args[0]
+        body = request.data.decode("utf-8")
+        headers = {key.lower(): value for key, value in request.header_items()}
+        self.assertEqual("POST", request.get_method())
+        self.assertEqual(maps_providers_module.GOOGLE_PLACES_SEARCH_URL, request.full_url)
+        self.assertEqual("private-maps-key", headers["x-goog-api-key"])
+        self.assertNotIn("private-maps-key", request.full_url)
+        self.assertNotIn("private-maps-key", body)
+        self.assertIn("places.formattedAddress", headers["x-goog-fieldmask"])
+        self.assertEqual("US", result.country_code)
+        self.assertEqual("Google Maps", result.attribution)
+
+    def test_openstreetmap_identifies_request_filters_us_and_returns_attribution(self) -> None:
+        response = self.FakeResponse([{
+            "display_name": "Example Co, Dayton, Ohio, United States",
+            "address": {"country_code": "us"},
+        }])
+        maps_providers_module._last_nominatim_request_at = 0.0
+        with (
+            patch.object(maps_providers_module.config, "get_nominatim_base_url", return_value="https://nominatim.example.test"),
+            patch.object(maps_providers_module.urllib.request, "urlopen", return_value=response) as open_url,
+        ):
+            result = lookup_headquarters(
+                MapsProviderSettings("openstreetmap"),
+                "Example Co",
+                prefer_us=True,
+            )
+
+        request = open_url.call_args.args[0]
+        self.assertIn("countrycodes=us", request.full_url)
+        self.assertIn("format=jsonv2", request.full_url)
+        self.assertIn("JobApplierAgent", request.get_header("User-agent"))
+        self.assertEqual("openstreetmap", result.source)
+        self.assertEqual("US", result.country_code)
+        self.assertEqual("© OpenStreetMap contributors", result.attribution)
+
+    def test_maps_provider_readiness_requires_only_google_credentials(self) -> None:
+        with patch.object(maps_providers_module.config, "get_google_maps_api_key", return_value=""):
+            self.assertFalse(maps_provider_ready({"maps_provider": "google", "google_maps_api_key": ""}))
+            self.assertTrue(maps_provider_ready({"maps_provider": "openstreetmap", "google_maps_api_key": ""}))
+
+    def test_new_profile_defaults_select_openstreetmap(self) -> None:
+        self.assertEqual("openstreetmap", maps_providers_module.normalize_maps_provider(None))
+        profile = app_module.ProfileUpdate(
+            name="Candidate",
+            email="candidate@example.test",
+            phone="",
+            github="",
+            linkedin="",
+            website="",
+            base_resume_text="Resume",
+        )
+        self.assertEqual("openstreetmap", profile.maps_provider)
+        html = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('<option value="openstreetmap" selected>', html)
+
+    def test_headquarters_fallback_uses_selected_ai_provider_and_requires_verification(self) -> None:
+        with (
+            patch.object(maps_providers_module, "lookup_headquarters", return_value=HeadquartersResult()),
+            patch.object(
+                maps_providers_module,
+                "generate_structured",
+                return_value={"address": "1 Main St, Dayton, OH 45402, United States", "country_code": "US", "verified": True},
+            ) as generate,
+        ):
+            result = resolve_headquarters(
+                MapsProviderSettings("openstreetmap"),
+                AIProviderSettings("openai", "gpt-5-mini", "saved-openai-key"),
+                "Example Co",
+            )
+
+        self.assertEqual("ai_openai", result.source)
+        self.assertIn("verify", result.warning.lower())
+        self.assertEqual("openai", generate.call_args.args[0].provider)
+
+    def test_lookup_cache_retains_openstreetmap_but_not_google_places_content(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute("""
+            CREATE TABLE headquarters_cache (
+                cache_key TEXT PRIMARY KEY, provider TEXT, address TEXT,
+                country_code TEXT, attribution TEXT, resolved_at TEXT
+            )
+        """)
+        class NonClosingConnection:
+            def execute(self, *args, **kwargs):
+                return connection.execute(*args, **kwargs)
+
+            def commit(self):
+                connection.commit()
+
+            def close(self):
+                pass
+
+        with patch.object(app_module, "get_db_connection", return_value=NonClosingConnection()):
+            app_module._cache_headquarters(
+                "google-key",
+                HeadquartersResult("Google address", "google", "Google Maps", "US"),
+                "google",
+            )
+        self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM headquarters_cache").fetchone()[0])
+
+        with patch.object(app_module, "get_db_connection", return_value=NonClosingConnection()):
+            app_module._cache_headquarters(
+                "osm-key",
+                HeadquartersResult("OSM address", "openstreetmap", "© OpenStreetMap contributors", "US"),
+                "openstreetmap",
+            )
+        self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM headquarters_cache").fetchone()[0])
+        connection.close()
 
 
 class ApplicationMaterialsSafetyTests(unittest.TestCase):
@@ -345,6 +493,8 @@ class FrontendStartupTests(unittest.TestCase):
             "saved-search-select", "p-resume-mode",
             "p-ai-provider", "p-ai-model", "p-openai-apikey",
             "p-openai-key-status", "p-openai-key-help", "test-ai-provider-btn",
+            "p-maps-provider", "test-maps-provider-btn", "maps-provider-test-status",
+            "google-maps-key-group", "openstreetmap-policy",
             "p-prefer-us-headquarters",
             "p-gemini-key-status", "p-gemini-key-help",
             "p-google-key-status", "p-google-key-help",
@@ -364,8 +514,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-5", html_source)
-        self.assertIn("index.css?v=20260808-5", html_source)
+        self.assertIn("app.js?v=20260808-7", html_source)
+        self.assertIn("index.css?v=20260808-7", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -373,7 +523,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.6", source)
+                self.assertIn("20260808.8", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -692,10 +842,11 @@ class ProfileSecretPresenceTests(unittest.TestCase):
                 openai_api_key TEXT,
                 google_maps_api_key TEXT,
                 ai_provider TEXT,
-                ai_model TEXT
+                ai_model TEXT,
+                maps_provider TEXT
             );
             INSERT INTO profile VALUES (
-                1, 'Test Candidate', 'gemini-secret', '', '', 'gemini', 'gemini-2.5-flash'
+                1, 'Test Candidate', 'gemini-secret', '', '', 'gemini', 'gemini-2.5-flash', 'google'
             );
         """)
         connection.commit()
@@ -763,6 +914,29 @@ class ProfileSecretPresenceTests(unittest.TestCase):
         self.assertEqual("openai", settings.provider)
         self.assertEqual("gpt-5-mini", settings.model)
         self.assertEqual("saved-key", settings.api_key)
+
+    def test_maps_capability_endpoint_uses_saved_provider_without_returning_keys(self) -> None:
+        connection = self.connection_factory()
+        connection.execute("UPDATE profile SET maps_provider = 'openstreetmap' WHERE id = 1")
+        connection.commit()
+        connection.close()
+        provider_result = {
+            "success": True,
+            "provider": "openstreetmap",
+            "provider_label": "OpenStreetMap Nominatim",
+            "message": "OpenStreetMap Nominatim is ready for headquarters lookups.",
+            "attribution": "© OpenStreetMap contributors",
+        }
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_maps_provider", return_value=provider_result) as validate,
+        ):
+            result = app_module.validate_selected_maps_provider()
+
+        settings = validate.call_args.args[0]
+        self.assertEqual("openstreetmap", settings.provider)
+        self.assertEqual("", settings.api_key)
+        self.assertEqual(provider_result, result)
 
 
 class LocalBrowserBoundaryTests(unittest.TestCase):
@@ -1183,10 +1357,11 @@ class HeadquartersPreferenceTests(unittest.TestCase):
                     id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT,
                     github TEXT, linkedin TEXT, website TEXT, base_resume_text TEXT,
                     resume_mode TEXT, ai_provider TEXT, ai_model TEXT,
+                    maps_provider TEXT,
                     prefer_us_headquarters INTEGER,
                     suggested_keywords TEXT
                 );
-                INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 1, '');
+                INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 'google', 1, '');
             """)
             connection.close()
 
@@ -1219,22 +1394,27 @@ class HeadquartersPreferenceTests(unittest.TestCase):
 
     @patch("urllib.request.urlopen")
     def test_us_preference_rejects_non_us_places_result(self, urlopen) -> None:
-        response = unittest.mock.MagicMock()
-        response.__enter__.return_value.read.return_value = (
-            b'{"candidates":[{"formatted_address":"Chennai, Tamil Nadu 600100, India"}]}'
+        us_response = unittest.mock.MagicMock()
+        us_response.__enter__.return_value.read.return_value = (
+            b'{"places":[{"formattedAddress":"Chennai, Tamil Nadu 600100, India",'
+            b'"addressComponents":[{"shortText":"IN","types":["country"]}]}]}'
         )
-        urlopen.return_value = response
+        global_response = unittest.mock.MagicMock()
+        global_response.__enter__.return_value.read.return_value = b'{"places":[]}'
+        urlopen.side_effect = [us_response, global_response]
         with patch("utils.get_gemini_api_key", return_value=""):
             self.assertEqual(
                 "Unknown",
                 find_us_headquarters("Future Works", api_key="", google_maps_key="maps-key", prefer_us=True),
             )
+        self.assertEqual(2, urlopen.call_count)
 
     @patch("urllib.request.urlopen")
     def test_global_preference_accepts_formatted_global_result(self, urlopen) -> None:
         response = unittest.mock.MagicMock()
         response.__enter__.return_value.read.return_value = (
-            b'{"candidates":[{"formatted_address":"London EC1V 3AG, United Kingdom"}]}'
+            b'{"places":[{"formattedAddress":"London EC1V 3AG, United Kingdom",'
+            b'"addressComponents":[{"shortText":"GB","types":["country"]}]}]}'
         )
         urlopen.return_value = response
         self.assertEqual(
@@ -1931,9 +2111,34 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
             indexes = {row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'index'"
             )}
+            profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(profile)")}
+            application_columns = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
+            maps_provider = connection.execute("SELECT maps_provider FROM profile WHERE id = 1").fetchone()[0]
             connection.close()
         self.assertIn("source_diagnostics", tables)
+        self.assertIn("headquarters_cache", tables)
         self.assertIn("idx_source_diagnostics_recorded_at", indexes)
+        self.assertIn("maps_provider", profile_columns)
+        self.assertEqual("openstreetmap", maps_provider)
+        self.assertTrue({"headquarters_source", "headquarters_attribution"}.issubset(application_columns))
+
+    def test_maps_provider_migration_preserves_google_for_existing_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "legacy-profile.db"
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE profile (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO profile VALUES (1, 'Existing Candidate');
+            """)
+            connection.commit()
+            connection.close()
+            with patch.object(database_module, "DB_PATH", database_path):
+                database_module.init_db()
+            connection = sqlite3.connect(database_path)
+            provider = connection.execute("SELECT maps_provider FROM profile WHERE id = 1").fetchone()[0]
+            connection.close()
+
+        self.assertEqual("google", provider)
 
 
 class LifecycleSchemaTests(unittest.TestCase):
@@ -1942,7 +2147,7 @@ class LifecycleSchemaTests(unittest.TestCase):
         lifecycle_columns = {
             "created_at", "tailored_at", "form_filled_at", "submitted_at",
             "confirmed_at", "application_method", "submission_evidence", "notes", "follow_up_date", "tailored_resume_text",
-            "cover_letter_path",
+            "cover_letter_path", "headquarters_source", "headquarters_attribution",
         }
         actual = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
         self.assertTrue(lifecycle_columns.issubset(actual))
@@ -1951,10 +2156,10 @@ class LifecycleSchemaTests(unittest.TestCase):
         profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(profile)")}
         self.assertIn("resume_mode", profile_columns)
         self.assertIn("prefer_us_headquarters", profile_columns)
-        self.assertTrue({"ai_provider", "ai_model", "openai_api_key"}.issubset(profile_columns))
+        self.assertTrue({"ai_provider", "ai_model", "openai_api_key", "maps_provider"}.issubset(profile_columns))
         self.assertEqual(1, connection.execute("PRAGMA foreign_keys").fetchone()[0])
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertTrue({"application_status_history", "saved_searches", "job_suppressions", "source_diagnostics"}.issubset(tables))
+        self.assertTrue({"application_status_history", "saved_searches", "job_suppressions", "source_diagnostics", "headquarters_cache"}.issubset(tables))
         saved_search_columns = {row[1] for row in connection.execute("PRAGMA table_info(saved_searches)")}
         self.assertTrue({"schedule_frequency", "next_alert_at"}.issubset(saved_search_columns))
         connection.close()

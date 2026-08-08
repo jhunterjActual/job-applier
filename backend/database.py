@@ -42,6 +42,7 @@ def init_db() -> None:
         openai_api_key TEXT DEFAULT '',
         ai_provider TEXT NOT NULL DEFAULT 'gemini',
         ai_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash',
+        maps_provider TEXT NOT NULL DEFAULT 'openstreetmap',
         prefer_us_headquarters INTEGER NOT NULL DEFAULT 1
     )
     """)
@@ -109,6 +110,8 @@ def init_db() -> None:
         submission_evidence TEXT,
         notes TEXT,
         follow_up_date TEXT,
+        headquarters_source TEXT,
+        headquarters_attribution TEXT,
         FOREIGN KEY (job_id) REFERENCES jobs(id)
     )
     """)
@@ -154,6 +157,17 @@ def init_db() -> None:
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_source_diagnostics_recorded_at ON source_diagnostics(recorded_at DESC)"
     )
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS headquarters_cache (
+        cache_key TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        address TEXT NOT NULL,
+        country_code TEXT NOT NULL DEFAULT '',
+        attribution TEXT NOT NULL DEFAULT '',
+        resolved_at TEXT NOT NULL
+    )
+    """)
     
     # Check and add suggested_keywords column if it doesn't exist
     _add_column_if_missing(cursor, "profile", "suggested_keywords", "TEXT DEFAULT ''")
@@ -161,6 +175,7 @@ def init_db() -> None:
     _add_column_if_missing(cursor, "profile", "openai_api_key", "TEXT DEFAULT ''")
     _add_column_if_missing(cursor, "profile", "ai_provider", "TEXT NOT NULL DEFAULT 'gemini'")
     _add_column_if_missing(cursor, "profile", "ai_model", "TEXT NOT NULL DEFAULT 'gemini-2.5-flash'")
+    _add_column_if_missing(cursor, "profile", "maps_provider", "TEXT NOT NULL DEFAULT 'google'")
     _add_column_if_missing(cursor, "profile", "resume_mode", "TEXT DEFAULT 'general_professional'")
     _add_column_if_missing(cursor, "profile", "prefer_us_headquarters", "INTEGER NOT NULL DEFAULT 1")
     _add_column_if_missing(cursor, "jobs", "archived_at", "TEXT")
@@ -187,6 +202,8 @@ def init_db() -> None:
     _add_column_if_missing(cursor, "applications", "follow_up_date", "TEXT")
     _add_column_if_missing(cursor, "applications", "tailored_resume_text", "TEXT")
     _add_column_if_missing(cursor, "applications", "cover_letter_path", "TEXT")
+    _add_column_if_missing(cursor, "applications", "headquarters_source", "TEXT")
+    _add_column_if_missing(cursor, "applications", "headquarters_attribution", "TEXT")
     _add_column_if_missing(cursor, "saved_searches", "schedule_frequency", "TEXT DEFAULT 'none'")
     _add_column_if_missing(cursor, "saved_searches", "next_alert_at", "TEXT")
 
@@ -229,9 +246,9 @@ def init_db() -> None:
         INSERT INTO profile (
             name, email, phone, github, linkedin, website, base_resume_text,
             gemini_api_key, openai_api_key, ai_provider, ai_model,
-            suggested_keywords, google_maps_api_key
+            maps_provider, suggested_keywords, google_maps_api_key
         )
-        VALUES ('', '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', '', '')
+        VALUES ('', '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 'openstreetmap', '', '')
         """)
     # Clean up any previously stored junk/closed postings
     cursor.execute("""
