@@ -22,6 +22,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [x] Fix lifecycle date-field accessibility and usability: keep all date segments legible while one segment is selected, preserve visible focus/selection contrast in the dark theme, and provide a date control supporting both calendar selection and validated direct text entry.
 - [x] Preview and bulk archive or delete untouched jobs while preserving generated materials and application history.
 - [x] Add reversible archive/restore recovery for bulk cleanup.
+- [ ] Preserve privacy-safe tombstones for manually or permanently deleted job postings so later **Search & Analyze** runs suppress the same canonical posting instead of restoring it; provide a way to review and clear suppressed-posting records when the user wants to rediscover a job.
 - [x] Add undo/recovery for other lifecycle corrections.
 - [x] Replace frontend `innerHTML` interpolation of job data with safe DOM construction and validated links.
 - [x] Stop returning plaintext API keys from profile reads; mask keys and use dedicated secret-update operations.

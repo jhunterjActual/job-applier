@@ -179,6 +179,7 @@ class FrontendStartupTests(unittest.TestCase):
             "p-prefer-us-headquarters",
             "p-gemini-key-status", "p-gemini-key-help",
             "p-google-key-status", "p-google-key-help",
+            "startup-activity-title", "startup-activity-description",
             "lifecycle-applied-calendar-btn", "saved-search-frequency", "provider-alerts",
             "open-job-import-btn", "job-import-modal", "job-import-form",
             "job-import-url", "preview-job-import-btn", "job-import-fields",
@@ -188,8 +189,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260807-4", html_source)
-        self.assertIn("index.css?v=20260807-4", html_source)
+        self.assertIn("app.js?v=20260808-1", html_source)
+        self.assertIn("index.css?v=20260808-1", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -197,7 +198,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260807.4", source)
+                self.assertIn("20260808.1", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -295,6 +296,15 @@ class FrontendStartupTests(unittest.TestCase):
         script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('["stale_postings", "partial_results"]', script_source)
         self.assertIn('needsAttention ? "Some job sources may need attention" : "Search notes"', script_source)
+
+    def test_startup_activity_reflects_loaded_profile_state(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+        script_source = (static_dir / "app.js").read_text(encoding="utf-8")
+        self.assertNotIn("Fill in your profile details to start.", html_source)
+        self.assertIn("updateStartupActivity(profile)", script_source)
+        self.assertIn('title.textContent = "Profile Loaded"', script_source)
+        self.assertIn('title.textContent = "Profile Setup Needed"', script_source)
 
 
 class ProfileSecretPresenceTests(unittest.TestCase):

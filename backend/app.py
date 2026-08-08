@@ -32,7 +32,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260807.4"
+APP_BUILD = "20260808.1"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}

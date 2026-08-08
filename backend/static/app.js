@@ -692,6 +692,23 @@ function markSecretStatusesUnavailable() {
     });
 }
 
+function updateStartupActivity(profile) {
+    const title = document.getElementById("startup-activity-title");
+    const description = document.getElementById("startup-activity-description");
+    if (!title || !description) return;
+
+    const profileReady = !!(profile?.name && profile?.email && profile?.base_resume_text);
+    if (profileReady) {
+        title.textContent = "Profile Loaded";
+        description.textContent = geminiKeyConfigured
+            ? "Your saved profile is ready to search, tailor materials, and track applications."
+            : "Your saved profile is loaded. Add a Gemini API key when you are ready to match and tailor jobs.";
+    } else {
+        title.textContent = "Profile Setup Needed";
+        description.textContent = "Add your name, email, and base resume in Profile & Resume to get started.";
+    }
+}
+
 // ----------------------------------------------------
 // API Communication Logic
 // ----------------------------------------------------
@@ -715,6 +732,7 @@ async function loadProfile() {
             geminiKeyConfigured = !!profile.gemini_api_key_configured;
             googleMapsKeyConfigured = !!profile.google_maps_api_key_configured;
             updateSecretStatuses();
+            updateStartupActivity(profile);
             pResume.value = profile.base_resume_text || "";
             pResumeMode.value = profile.resume_mode || "general_professional";
             pPreferUsHeadquarters.checked = profile.prefer_us_headquarters !== 0;
