@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-10">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-11">
 </head>
 <body>
     <div class="app-container">
@@ -404,6 +404,94 @@
                             </select>
                         </label>
                         <span class="text-muted" id="job-result-count"></span>
+                        <details class="advanced-job-filters" id="advanced-job-filters">
+                            <summary>
+                                Advanced filters
+                                <span class="cleanup-count-badge" id="job-active-filter-count" hidden>0 active</span>
+                            </summary>
+                            <div class="advanced-filter-grid">
+                                <label>Employment type
+                                    <select id="job-employment-filter">
+                                        <option value="">Any type</option>
+                                        <option value="full_time">Full time</option>
+                                        <option value="part_time">Part time</option>
+                                        <option value="contract">Contract</option>
+                                        <option value="temporary">Temporary</option>
+                                        <option value="internship">Internship</option>
+                                    </select>
+                                </label>
+                                <label>Commute / arrangement
+                                    <select id="job-commute-filter">
+                                        <option value="">Any arrangement</option>
+                                        <option value="remote">Remote only</option>
+                                        <option value="remote_or_hybrid">Remote or hybrid</option>
+                                        <option value="on_site">On-site only</option>
+                                    </select>
+                                </label>
+                                <label>Minimum annual pay
+                                    <span class="filter-input-prefix"><span aria-hidden="true">$</span><input type="number" id="job-min-annual-compensation" min="0" max="1000000" step="5000" inputmode="numeric" placeholder="e.g. 120000"></span>
+                                </label>
+                                <label>Minimum hourly / contract rate
+                                    <span class="filter-input-prefix"><span aria-hidden="true">$</span><input type="number" id="job-min-hourly-rate" min="0" max="2000" step="5" inputmode="decimal" placeholder="e.g. 75"></span>
+                                </label>
+                                <label>Shift / on-call
+                                    <select id="job-shift-filter">
+                                        <option value="">Any schedule</option>
+                                        <option value="day_only">Day shift only</option>
+                                        <option value="no_nights">Exclude night / rotating shifts</option>
+                                        <option value="no_on_call">Exclude on-call roles</option>
+                                    </select>
+                                </label>
+                                <label>Maximum travel
+                                    <select id="job-max-travel-filter">
+                                        <option value="">Any travel</option>
+                                        <option value="0">No travel</option>
+                                        <option value="10">Up to 10%</option>
+                                        <option value="25">Up to 25%</option>
+                                        <option value="50">Up to 50%</option>
+                                    </select>
+                                </label>
+                                <label>Visa sponsorship
+                                    <select id="job-sponsorship-filter">
+                                        <option value="">Any sponsorship status</option>
+                                        <option value="available">Sponsorship available</option>
+                                        <option value="exclude_unavailable">Exclude jobs saying no sponsorship</option>
+                                    </select>
+                                </label>
+                                <label>Maximum clearance
+                                    <select id="job-clearance-filter">
+                                        <option value="">Any clearance</option>
+                                        <option value="0">No clearance requirement</option>
+                                        <option value="1">Public Trust</option>
+                                        <option value="2">Secret</option>
+                                        <option value="3">Top Secret</option>
+                                        <option value="4">TS/SCI</option>
+                                    </select>
+                                </label>
+                                <label>Professional licenses
+                                    <select id="job-license-filter">
+                                        <option value="">Any license status</option>
+                                        <option value="exclude_required">Exclude jobs requiring a license</option>
+                                    </select>
+                                </label>
+                                <label>Work conditions
+                                    <select id="job-conditions-filter">
+                                        <option value="">Any conditions</option>
+                                        <option value="exclude_physical">Exclude physical / outdoor conditions</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <div class="advanced-filter-footer">
+                                <label class="advanced-filter-unknown">
+                                    <input type="checkbox" id="job-include-unknown" checked>
+                                    Include jobs when the posting does not specify a selected detail
+                                </label>
+                                <button type="button" class="btn btn-secondary btn-sm" id="reset-advanced-job-filters">
+                                    <i class="fa-solid fa-filter-circle-xmark" aria-hidden="true"></i> Reset advanced filters
+                                </button>
+                            </div>
+                            <p class="form-help">These filters use deterministic signals found locally in each posting. They do not change match scores or send job details to an AI provider.</p>
+                        </details>
                     </div>
                     <div class="card-body no-padding">
                         <div class="table-responsive">
@@ -820,6 +908,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-10"></script>
+    <script src="/static/app.js?v=20260808-11"></script>
 </body>
 </html>

@@ -97,6 +97,25 @@ const savedSearchFrequency = document.getElementById("saved-search-frequency");
 const jobMinScore = document.getElementById("job-min-score");
 const jobStatusFilter = document.getElementById("job-status-filter");
 const jobSortOrder = document.getElementById("job-sort-order");
+const advancedJobFilters = document.getElementById("advanced-job-filters");
+const jobEmploymentFilter = document.getElementById("job-employment-filter");
+const jobCommuteFilter = document.getElementById("job-commute-filter");
+const jobMinAnnualCompensation = document.getElementById("job-min-annual-compensation");
+const jobMinHourlyRate = document.getElementById("job-min-hourly-rate");
+const jobShiftFilter = document.getElementById("job-shift-filter");
+const jobMaxTravelFilter = document.getElementById("job-max-travel-filter");
+const jobSponsorshipFilter = document.getElementById("job-sponsorship-filter");
+const jobClearanceFilter = document.getElementById("job-clearance-filter");
+const jobLicenseFilter = document.getElementById("job-license-filter");
+const jobConditionsFilter = document.getElementById("job-conditions-filter");
+const jobIncludeUnknown = document.getElementById("job-include-unknown");
+const resetAdvancedJobFiltersBtn = document.getElementById("reset-advanced-job-filters");
+const jobActiveFilterCount = document.getElementById("job-active-filter-count");
+const advancedJobFilterControls = [
+    jobEmploymentFilter, jobCommuteFilter, jobMinAnnualCompensation, jobMinHourlyRate,
+    jobShiftFilter, jobMaxTravelFilter, jobSponsorshipFilter, jobClearanceFilter,
+    jobLicenseFilter, jobConditionsFilter, jobIncludeUnknown
+].filter(Boolean);
 const providerAlerts = document.getElementById("provider-alerts");
 const savedSearchAlerts = document.getElementById("saved-search-alerts");
 const openSourceDiagnosticsBtn = document.getElementById("open-source-diagnostics-btn");
@@ -245,6 +264,11 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(jobMinScore, "change", renderFilteredJobs);
     bindEvent(jobStatusFilter, "change", renderFilteredJobs);
     bindEvent(jobSortOrder, "change", renderFilteredJobs);
+    advancedJobFilterControls.forEach(control => {
+        const eventName = control.matches('input[type="number"]') ? "input" : "change";
+        bindEvent(control, eventName, renderFilteredJobs);
+    });
+    bindEvent(resetAdvancedJobFiltersBtn, "click", resetAdvancedJobFilters);
     bindEvent(stopLoadingBtn, "click", stopActiveLoadingOperation);
 
     loadProfile();
@@ -1454,6 +1478,172 @@ async function loadJobs(options = {}) {
     }
 }
 
+function numericJobFilterValue(control) {
+    const value = String(control?.value || "").trim();
+    if (!value) return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
+function currentAdvancedJobFilters() {
+    return {
+        employment: jobEmploymentFilter?.value || "",
+        commute: jobCommuteFilter?.value || "",
+        annualCompensation: numericJobFilterValue(jobMinAnnualCompensation),
+        hourlyRate: numericJobFilterValue(jobMinHourlyRate),
+        shift: jobShiftFilter?.value || "",
+        maxTravel: numericJobFilterValue(jobMaxTravelFilter),
+        sponsorship: jobSponsorshipFilter?.value || "",
+        clearance: numericJobFilterValue(jobClearanceFilter),
+        license: jobLicenseFilter?.value || "",
+        conditions: jobConditionsFilter?.value || "",
+        includeUnknown: jobIncludeUnknown?.checked !== false
+    };
+}
+
+function knownJobFilterMatch(value, predicate, includeUnknown) {
+    if (value === null || value === undefined || value === "" || value === "unknown") {
+        return includeUnknown;
+    }
+    return predicate(value);
+}
+
+function jobMatchesAdvancedFilters(job, filters = currentAdvancedJobFilters()) {
+    const facets = job.filter_facets || {};
+    if (filters.employment && !knownJobFilterMatch(
+        facets.employment_type,
+        value => value === filters.employment,
+        filters.includeUnknown
+    )) return false;
+
+    if (filters.commute) {
+        const commuteMatches = value => filters.commute === "remote_or_hybrid"
+            ? ["remote", "hybrid"].includes(value)
+            : value === filters.commute;
+        if (!knownJobFilterMatch(facets.commute_requirement, commuteMatches, filters.includeUnknown)) return false;
+    }
+
+    if (filters.annualCompensation !== null) {
+        const annualMaximum = facets.compensation_period === "annual" ? facets.compensation_max : null;
+        if (!knownJobFilterMatch(
+            annualMaximum,
+            value => Number(value) >= filters.annualCompensation,
+            filters.includeUnknown
+        )) return false;
+    }
+
+    if (filters.hourlyRate !== null) {
+        const hourlyMaximum = facets.compensation_period === "hourly" ? facets.compensation_max : null;
+        if (!knownJobFilterMatch(
+            hourlyMaximum,
+            value => Number(value) >= filters.hourlyRate,
+            filters.includeUnknown
+        )) return false;
+    }
+
+    if (filters.shift) {
+        const shiftTags = Array.isArray(facets.shift_tags) ? facets.shift_tags : [];
+        if (!shiftTags.length) {
+            if (!filters.includeUnknown) return false;
+        } else if (filters.shift === "day_only"
+            && (!shiftTags.includes("day") || shiftTags.some(tag => ["night", "evening", "rotating", "weekend", "on_call"].includes(tag)))) {
+            return false;
+        } else if (filters.shift === "no_nights" && shiftTags.some(tag => ["night", "rotating"].includes(tag))) {
+            return false;
+        } else if (filters.shift === "no_on_call" && shiftTags.includes("on_call")) {
+            return false;
+        }
+    }
+
+    if (filters.maxTravel !== null) {
+        const travelPercent = facets.travel_required === false ? 0 : facets.travel_percent;
+        if (!knownJobFilterMatch(
+            travelPercent,
+            value => Number(value) <= filters.maxTravel,
+            filters.includeUnknown
+        )) return false;
+    }
+
+    if (filters.sponsorship) {
+        const sponsorshipMatches = value => filters.sponsorship === "available"
+            ? value === "available"
+            : value !== "unavailable";
+        if (!knownJobFilterMatch(facets.sponsorship, sponsorshipMatches, filters.includeUnknown)) return false;
+    }
+
+    if (filters.clearance !== null && !knownJobFilterMatch(
+        facets.clearance_rank,
+        value => Number(value) <= filters.clearance,
+        filters.includeUnknown
+    )) return false;
+
+    if (filters.license === "exclude_required" && facets.license_required === true) return false;
+    if (filters.conditions === "exclude_physical" && facets.physical_conditions === true) return false;
+    return true;
+}
+
+function activeAdvancedJobFilterCount(filters = currentAdvancedJobFilters()) {
+    return [
+        filters.employment, filters.commute, filters.annualCompensation, filters.hourlyRate,
+        filters.shift, filters.maxTravel, filters.sponsorship, filters.clearance,
+        filters.license, filters.conditions
+    ].filter(value => value !== "" && value !== null && value !== undefined).length;
+}
+
+function updateAdvancedJobFilterSummary(filters = currentAdvancedJobFilters()) {
+    const count = activeAdvancedJobFilterCount(filters);
+    if (jobActiveFilterCount) {
+        jobActiveFilterCount.hidden = count === 0;
+        jobActiveFilterCount.textContent = `${count} active`;
+    }
+    advancedJobFilters?.classList.toggle("has-active-filters", count > 0);
+    return count;
+}
+
+function resetAdvancedJobFilters(render = true) {
+    [jobEmploymentFilter, jobCommuteFilter, jobShiftFilter, jobMaxTravelFilter,
+        jobSponsorshipFilter, jobClearanceFilter, jobLicenseFilter, jobConditionsFilter]
+        .filter(Boolean)
+        .forEach(control => { control.value = ""; });
+    [jobMinAnnualCompensation, jobMinHourlyRate]
+        .filter(Boolean)
+        .forEach(control => { control.value = ""; });
+    if (jobIncludeUnknown) jobIncludeUnknown.checked = true;
+    if (render) renderFilteredJobs();
+}
+
+function jobRequirementSummary(job) {
+    const facets = job.filter_facets || {};
+    const signals = [];
+    if (facets.travel_required === true) {
+        signals.push(facets.travel_percent === null || facets.travel_percent === undefined
+            ? "Travel required"
+            : `Up to ${facets.travel_percent}% travel`);
+    }
+    const shiftTags = Array.isArray(facets.shift_tags) ? facets.shift_tags : [];
+    if (shiftTags.includes("night")) signals.push("Night shift");
+    else if (shiftTags.includes("rotating")) signals.push("Rotating shift");
+    else if (shiftTags.includes("evening")) signals.push("Evening shift");
+    if (shiftTags.includes("on_call")) signals.push("On call");
+    if (facets.sponsorship === "unavailable") signals.push("No sponsorship");
+    if (facets.sponsorship === "available") signals.push("Sponsorship available");
+    if (Number(facets.clearance_rank) > 0) {
+        const clearanceLabels = { 1: "Public Trust", 2: "Secret clearance", 3: "Top Secret clearance", 4: "TS/SCI" };
+        signals.push(clearanceLabels[Number(facets.clearance_rank)] || "Clearance required");
+    }
+    const licenseTags = Array.isArray(facets.license_tags) ? facets.license_tags : [];
+    if (licenseTags.length) {
+        const licenseLabels = {
+            registered_nurse: "RN license", commercial_driver: "CDL", driver: "Driver’s license",
+            cpa: "CPA", professional_engineer: "PE license", teaching: "Teaching license",
+            legal: "Bar admission", medical: "Medical license", other: "Professional license"
+        };
+        signals.push(`${licenseTags.slice(0, 2).map(tag => licenseLabels[tag] || tag.replaceAll("_", " ")).join(" / ")} required`);
+    }
+    if (facets.physical_conditions === true) signals.push("Physical / outdoor work");
+    return signals.slice(0, 4).join(" · ");
+}
+
 function renderFilteredJobs(revealJobId = null) {
     jobsTableBody.replaceChildren();
     const revealedJob = revealJobId
@@ -1480,23 +1670,33 @@ function renderFilteredJobs(revealJobId = null) {
             jobStatusFilter.value = "";
             viewChanges.push("The status filter was reset to show the imported job.");
         }
+        if (!jobMatchesAdvancedFilters(revealedJob)) {
+            resetAdvancedJobFilters(false);
+            viewChanges.push("Advanced filters were reset so the imported job is visible.");
+        }
     }
     const minimumScore = Number(jobMinScore?.value || 40);
     const statusFilter = jobStatusFilter?.value || "";
+    const advancedFilters = currentAdvancedJobFilters();
     let jobs = loadedJobs.filter(job => job.match_score === null || Number(job.match_score) >= minimumScore);
     if (statusFilter === "applied") {
         jobs = jobs.filter(job => ["applied", "interview", "offer", "rejected", "withdrawn", "closed"].includes(job.status));
     } else if (statusFilter) {
         jobs = jobs.filter(job => job.status === statusFilter);
     }
+    jobs = jobs.filter(job => jobMatchesAdvancedFilters(job, advancedFilters));
     const order = jobSortOrder?.value || "score_desc";
     jobs.sort((a, b) => order === "company"
         ? String(a.company).localeCompare(String(b.company))
         : order === "newest"
             ? String(b.date_found || "").localeCompare(String(a.date_found || ""))
             : Number(b.match_score ?? -1) - Number(a.match_score ?? -1));
+    const activeAdvancedFilters = updateAdvancedJobFilterSummary(advancedFilters);
     const resultCount = document.getElementById("job-result-count");
-    if (resultCount) resultCount.textContent = `${jobs.length} of ${loadedJobs.length} jobs`;
+    if (resultCount) {
+        const filterSummary = activeAdvancedFilters ? ` · ${activeAdvancedFilters} advanced` : "";
+        resultCount.textContent = `${jobs.length} of ${loadedJobs.length} jobs${filterSummary}`;
+    }
 
     if (jobs.length === 0) {
             jobsTableBody.innerHTML = `
@@ -1544,6 +1744,10 @@ function buildJobRow(job) {
         [job.source || "unknown source", job.date_found || "date unknown"].join(" · ")
     ].filter(Boolean);
     detailParts.forEach(part => detailsCell.appendChild(createElement("span", "", String(part))));
+    const requirementSummary = jobRequirementSummary(job);
+    if (requirementSummary) {
+        detailsCell.appendChild(createElement("span", "job-requirements", requirementSummary));
+    }
     tr.appendChild(detailsCell);
 
     const hasScore = job.match_score !== null && job.match_score !== undefined;

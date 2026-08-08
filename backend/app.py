@@ -46,6 +46,7 @@ from utils import generate_resume_pdf
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import is_job_suppressed, record_job_suppression
+from job_filters import derive_job_filter_facets
 from source_diagnostics import list_source_diagnostics, persist_source_diagnostics
 from materials import cover_letter_output_path, material_download_name, persist_cover_letter, resolve_output_file
 from resume_documents import ResumeDocumentError, build_accessible_resume_docx, import_resume_document
@@ -79,7 +80,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.10"
+APP_BUILD = "20260808.11"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -696,7 +697,10 @@ def get_jobs(include_archived: bool = False) -> list[dict]:
         ORDER BY j.match_score DESC
     """).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    jobs = [dict(row) for row in rows]
+    for job in jobs:
+        job["filter_facets"] = derive_job_filter_facets(job)
+    return jobs
 
 
 @app.post("/api/jobs/import/preview")
