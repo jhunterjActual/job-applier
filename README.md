@@ -40,6 +40,10 @@ The application features a **FastAPI backend** that doubles as a static file ser
 6. **Local Security**:
    - Stored completely on your local machine. Profile details and private API keys stay in local SQLite (`data/jobapplier.db`), while generated PDF and TXT artifacts remain in the ignored local output directory.
 
+7. **Practical Job Filters**:
+   - Narrows the saved-job list by pay or contract rate, employment type, remote/hybrid/on-site arrangement, shift and on-call expectations, travel, sponsorship, clearance, professional license, and physical/outdoor work signals.
+   - Derives filter signals locally with deterministic text rules. Unspecified details remain included by default, and filtering does not change match scores or send posting details to an AI provider.
+
 ---
 
 ## 🛠️ Architecture

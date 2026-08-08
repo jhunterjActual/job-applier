@@ -49,6 +49,7 @@ from dependency_lock import (
     write_stamp,
 )
 from job_cleanup import apply_cleanup, cleanup_preview
+from job_filters import derive_job_filter_facets
 from job_suppressions import job_url_fingerprint, record_job_suppression
 from base_resumes import (
     LastBaseResumeError,
@@ -682,6 +683,88 @@ class ResumeRenderingTests(unittest.TestCase):
         self.assertIn('<section class="resume-section">', rendered)
 
 
+class JobFilterFacetTests(unittest.TestCase):
+    def test_technical_role_facets_cover_pay_travel_sponsorship_and_clearance(self) -> None:
+        facets = derive_job_filter_facets({
+            "title": "Cloud Security Director",
+            "description": (
+                "This remote role participates in an on-call rotation and requires up to 25% travel. "
+                "Candidates must hold an active TS/SCI clearance. No visa sponsorship is available."
+            ),
+            "compensation": "$180k - $220k per year",
+            "work_arrangement": "remote",
+            "employment_type": "full_time",
+        })
+
+        self.assertEqual("annual", facets["compensation_period"])
+        self.assertEqual(180_000, facets["compensation_min"])
+        self.assertEqual(220_000, facets["compensation_max"])
+        self.assertEqual("remote", facets["commute_requirement"])
+        self.assertEqual("full_time", facets["employment_type"])
+        self.assertEqual(25, facets["travel_percent"])
+        self.assertIn("on_call", facets["shift_tags"])
+        self.assertEqual("unavailable", facets["sponsorship"])
+        self.assertEqual(4, facets["clearance_rank"])
+
+    def test_healthcare_role_facets_cover_hourly_shift_license_and_conditions(self) -> None:
+        facets = derive_job_filter_facets({
+            "title": "Emergency Department RN",
+            "description": (
+                "Night shift. Active RN license required. Must lift up to 50 pounds and "
+                "stand for extended periods."
+            ),
+            "compensation": "$42-$55/hr",
+            "work_arrangement": "on_site",
+            "employment_type": "part_time",
+        })
+
+        self.assertEqual("hourly", facets["compensation_period"])
+        self.assertEqual(42, facets["compensation_min"])
+        self.assertEqual(55, facets["compensation_max"])
+        self.assertIn("night", facets["shift_tags"])
+        self.assertIn("registered_nurse", facets["license_tags"])
+        self.assertTrue(facets["license_required"])
+        self.assertTrue(facets["physical_conditions"])
+        self.assertIn("lifting", facets["condition_tags"])
+        self.assertIn("standing", facets["condition_tags"])
+
+    def test_non_it_trade_role_facets_cover_contract_rate_and_work_conditions(self) -> None:
+        facets = derive_job_filter_facets({
+            "title": "Commercial Driver",
+            "description": (
+                "A CDL-A is required. Regular driving and outdoor work. Zero travel outside "
+                "the assigned local route. Visa sponsorship is available."
+            ),
+            "compensation": "$38 per hour",
+            "work_arrangement": "on_site",
+            "employment_type": "contract",
+        })
+
+        self.assertEqual("hourly", facets["compensation_period"])
+        self.assertFalse(facets["travel_required"])
+        self.assertEqual(0, facets["travel_percent"])
+        self.assertEqual("available", facets["sponsorship"])
+        self.assertIn("commercial_driver", facets["license_tags"])
+        self.assertTrue(facets["physical_conditions"])
+
+    def test_unknown_and_negative_language_do_not_invent_requirements(self) -> None:
+        facets = derive_job_filter_facets({
+            "title": "Software Account Executive",
+            "description": "Sell licensed software with overnight data refreshes and a night mode. No Secret clearance is required.",
+            "compensation": "Competitive",
+            "work_arrangement": "",
+            "employment_type": "",
+        })
+
+        self.assertEqual("unknown", facets["compensation_period"])
+        self.assertEqual("unknown", facets["commute_requirement"])
+        self.assertEqual("unknown", facets["employment_type"])
+        self.assertEqual(0, facets["clearance_rank"])
+        self.assertFalse(facets["license_required"])
+        self.assertEqual([], facets["shift_tags"])
+        self.assertIsNone(facets["travel_required"])
+
+
 class FrontendStartupTests(unittest.TestCase):
     def test_required_startup_controls_exist_in_dashboard_html(self) -> None:
         static_dir = Path(__file__).parent / "static"
@@ -716,12 +799,19 @@ class FrontendStartupTests(unittest.TestCase):
             "duplicate-base-resume-btn", "base-resume-history-btn",
             "delete-base-resume-btn", "resume-ocr-consent", "base-resume-history-modal",
             "base-resume-version-list", "restore-base-resume-version-btn",
+            "advanced-job-filters", "job-active-filter-count",
+            "job-employment-filter", "job-commute-filter",
+            "job-min-annual-compensation", "job-min-hourly-rate",
+            "job-shift-filter", "job-max-travel-filter",
+            "job-sponsorship-filter", "job-clearance-filter",
+            "job-license-filter", "job-conditions-filter",
+            "job-include-unknown", "reset-advanced-job-filters",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-10", html_source)
-        self.assertIn("index.css?v=20260808-10", html_source)
+        self.assertIn("app.js?v=20260808-11", html_source)
+        self.assertIn("index.css?v=20260808-11", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -729,7 +819,16 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.10", source)
+                self.assertIn("20260808.11", source)
+
+    def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
+        project_dir = Path(__file__).parent.parent
+        app_source = (project_dir / "backend" / "app.py").read_text(encoding="utf-8")
+        script_source = (project_dir / "backend" / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('job["filter_facets"] = derive_job_filter_facets(job)', app_source)
+        self.assertIn("function jobMatchesAdvancedFilters", script_source)
+        self.assertIn("jobs = jobs.filter(job => jobMatchesAdvancedFilters", script_source)
+        self.assertNotIn("match_score =", script_source[script_source.index("function jobMatchesAdvancedFilters"):script_source.index("function activeAdvancedJobFilterCount")])
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent

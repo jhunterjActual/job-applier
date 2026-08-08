@@ -54,7 +54,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [x] Polish the cleanup-preview modal action bar: prevent Restore counts and labels from wrapping awkwardly, use consistent button sizing and icon alignment, establish a clearer primary/secondary/destructive hierarchy, and stack actions cleanly at narrow widths.
 - [x] Support multiple named base resumes with safe selection, duplication and deletion; automatic snapshots for meaningful saves; previewable, non-destructive version restore; migration of existing resume content; and source-resume/version attribution on newly tailored materials.
 - [x] Import DOCX/PDF resumes with an explicit, provider-backed OCR fallback for scanned pages and export an accessible DOCX alternative with semantic headings, real lists, editable text, and clickable contact links.
-- [ ] Add compensation, contract-rate, shift, travel, commute, sponsorship, clearance, license, and work-condition filters.
+- [x] Add deterministic, local job-result filters for compensation and contract rate, employment type, shift/on-call schedule, travel, commute/work arrangement, sponsorship, clearance, professional licenses, and physical/outdoor work conditions; include unspecified details by default and show the detected requirements used by the filters.
 - [ ] Add role-specific skills, projects, portfolios, licenses, certifications, and work-sample sections.
 - [ ] Add interview preparation and response-rate analytics by source, role, location, resume version, and application method.
 - [ ] Add multilingual assistance, mobile responsiveness, accessibility QA, encrypted backup, restore, and data export.
