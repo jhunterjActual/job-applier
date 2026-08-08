@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-14">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-15">
 </head>
 <body>
     <div class="app-container">
@@ -409,6 +409,20 @@
                             <small class="form-help">TXT, Markdown, DOCX, and text-based PDF imports stay local. If this option is selected, only PDF pages without readable text are sent as images to the selected AI provider. Imported text remains unsaved until you click Save Settings.</small>
                             <small class="form-help margin-top-sm">Meaningful changes create a restorable version when you click Save Settings. Clear headings like 'EXPERIENCE', 'PROJECTS', and 'EDUCATION' improve tailoring.</small>
                         </div>
+                    </div>
+                </div>
+                <div class="card data-portability-card margin-top-md">
+                    <div class="card-header">
+                        <h2>Data Portability</h2>
+                    </div>
+                    <div class="card-body data-portability-body">
+                        <div>
+                            <p>Download a versioned JSON copy of your profile settings, resumes and versions, jobs, applications, saved searches, deletion choices, and privacy-safe source diagnostics.</p>
+                            <p class="form-help">Stored API keys, generated-file paths, URL fingerprints, and provider caches are excluded. The export still contains personal and job-search data, so keep it private.</p>
+                        </div>
+                        <a class="btn btn-secondary" id="export-user-data-btn" href="/api/data-export" download>
+                            <i class="fa-solid fa-file-export" aria-hidden="true"></i> Export My Data
+                        </a>
                     </div>
                 </div>
             </section>
@@ -1060,6 +1074,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-14"></script>
+    <script src="/static/app.js?v=20260808-15"></script>
 </body>
 </html>

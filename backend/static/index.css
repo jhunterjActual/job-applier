@@ -578,6 +578,21 @@ a:hover {
     gap: 30px;
 }
 
+.data-portability-body {
+    align-items: center;
+    display: flex;
+    gap: 24px;
+    justify-content: space-between;
+}
+
+.data-portability-body p + p {
+    margin-top: 8px;
+}
+
+.data-portability-body .btn {
+    flex: 0 0 auto;
+}
+
 /* Form Styles */
 .form-grid {
     display: grid;
@@ -1987,6 +2002,15 @@ select:focus {
 
     #job-import-fields .full-width {
         grid-column: span 1;
+    }
+
+    .data-portability-body {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .data-portability-body .btn {
+        width: 100%;
     }
 }
 
