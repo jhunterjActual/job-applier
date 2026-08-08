@@ -759,6 +759,97 @@ select:focus {
     font-size: 13px;
 }
 
+.resume-card-header {
+    align-items: flex-end;
+    justify-content: space-between;
+}
+
+.resume-card-title {
+    display: flex;
+    flex: 1 1 260px;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.resume-card-title select {
+    min-width: 220px;
+}
+
+#p-resume-name:focus,
+#base-resume-select:focus {
+    color: var(--text-primary);
+}
+
+.resume-library-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.resume-history-layout {
+    display: grid;
+    grid-template-columns: minmax(210px, 0.8fr) minmax(0, 1.5fr);
+    gap: 20px;
+    min-height: 360px;
+}
+
+.resume-version-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.resume-version-item {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: rgba(15, 23, 42, 0.45);
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+}
+
+.resume-version-item:hover,
+.resume-version-item.selected {
+    border-color: var(--color-primary);
+    background: rgba(82, 166, 255, 0.12);
+}
+
+.resume-version-item strong,
+.resume-version-item span {
+    display: block;
+}
+
+.resume-version-item span {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.resume-version-preview {
+    min-width: 0;
+}
+
+.resume-version-preview pre {
+    min-height: 310px;
+    max-height: 52vh;
+    margin-top: 12px;
+    padding: 16px;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: rgba(5, 10, 22, 0.65);
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.resume-history-help {
+    margin-right: 16px;
+}
+
 /* Search Bar Grid */
 .search-bar-grid {
     display: grid;
@@ -1117,6 +1208,17 @@ select:focus {
     margin-left: auto;
     flex-wrap: wrap;
     justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+    .resume-history-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .resume-history-help {
+        width: 100%;
+        margin: 0 0 12px;
+    }
 }
 
 .job-import-url-row {

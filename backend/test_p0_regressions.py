@@ -39,6 +39,15 @@ from dependency_lock import (
 )
 from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import job_url_fingerprint, record_job_suppression
+from base_resumes import (
+    LastBaseResumeError,
+    activate_base_resume,
+    delete_base_resume,
+    get_base_resume,
+    list_versions,
+    restore_version,
+    save_base_resume,
+)
 from searcher import (
     _job_location_from_json_ld,
     _protect_browser_network,
@@ -510,12 +519,16 @@ class FrontendStartupTests(unittest.TestCase):
             "source-diagnostics-empty", "clear-source-diagnostics-btn",
             "export-source-diagnostics-btn",
             "loading-actions", "stop-loading-btn",
+            "base-resume-select", "p-resume-name", "new-base-resume-btn",
+            "duplicate-base-resume-btn", "base-resume-history-btn",
+            "delete-base-resume-btn", "base-resume-history-modal",
+            "base-resume-version-list", "restore-base-resume-version-btn",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-7", html_source)
-        self.assertIn("index.css?v=20260808-7", html_source)
+        self.assertIn("app.js?v=20260808-9", html_source)
+        self.assertIn("index.css?v=20260808-9", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -523,7 +536,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.8", source)
+                self.assertIn("20260808.9", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -536,6 +549,14 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertNotIn("Submit Application Now", html_source)
         self.assertNotIn("triggerApplicationSubmission", script_source)
         self.assertIn("Apply Manually", script_source)
+
+    def test_base_resume_controls_are_bound_to_versioned_workflows(self) -> None:
+        script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('bindEvent(newBaseResumeBtn, "click", startNewBaseResume)', script_source)
+        self.assertIn('bindEvent(duplicateBaseResumeBtn, "click", beginBaseResumeCopy)', script_source)
+        self.assertIn('bindEvent(baseResumeHistoryBtn, "click", showBaseResumeHistory)', script_source)
+        self.assertIn('bindEvent(deleteBaseResumeBtn, "click", removeBaseResume)', script_source)
+        self.assertIn("baseResumeVersionPreviewContent.textContent = version.content", script_source)
 
     def test_launchers_use_the_configurable_default_port(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -1011,6 +1032,39 @@ class LocalBrowserBoundaryTests(unittest.TestCase):
             connection.close()
             self.assertEqual("Original resume", stored)
 
+    def test_uploaded_resume_is_returned_without_being_saved_before_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "profile.db"
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE profile (
+                    id INTEGER PRIMARY KEY, base_resume_text TEXT, suggested_keywords TEXT
+                );
+                INSERT INTO profile VALUES (1, 'Original resume', 'existing');
+            """)
+            connection.close()
+
+            def connection_factory():
+                test_connection = sqlite3.connect(database_path)
+                test_connection.row_factory = sqlite3.Row
+                return test_connection
+
+            with patch.object(app_module, "get_db_connection", connection_factory):
+                response = self.client.post(
+                    "/api/profile/upload-resume",
+                    headers={"Origin": "http://127.0.0.1:8001"},
+                    files={"file": ("resume.md", b"# Imported resume", "text/markdown")},
+                )
+
+            self.assertEqual(200, response.status_code)
+            self.assertEqual("# Imported resume", response.json()["resume_text"])
+            connection = sqlite3.connect(database_path)
+            stored = connection.execute(
+                "SELECT base_resume_text, suggested_keywords FROM profile WHERE id = 1"
+            ).fetchone()
+            connection.close()
+            self.assertEqual(("Original resume", "existing"), stored)
+
 
 class ManualJobImportTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -1347,6 +1401,82 @@ class ManualJobImportTests(unittest.TestCase):
         self.assertEqual(0, stored["is_expired"])
 
 
+class BaseResumeVersionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute("PRAGMA foreign_keys = ON")
+        self.connection.executescript("""
+            CREATE TABLE profile (
+                id INTEGER PRIMARY KEY, base_resume_text TEXT, resume_mode TEXT,
+                active_base_resume_id INTEGER, suggested_keywords TEXT
+            );
+            CREATE TABLE base_resumes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                resume_mode TEXT NOT NULL, content TEXT NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE base_resume_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, base_resume_id INTEGER NOT NULL,
+                version_number INTEGER NOT NULL, name TEXT NOT NULL,
+                resume_mode TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL,
+                UNIQUE(base_resume_id, version_number),
+                FOREIGN KEY (base_resume_id) REFERENCES base_resumes(id) ON DELETE CASCADE
+            );
+            INSERT INTO profile VALUES (1, '', 'general_professional', NULL, 'stale');
+        """)
+
+    def tearDown(self) -> None:
+        self.connection.close()
+
+    def test_save_snapshots_changes_without_duplicate_versions(self) -> None:
+        created = save_base_resume(
+            self.connection, None, "Data Leadership", "technical_executive", "Version one"
+        )
+        activate_base_resume(self.connection, created["id"])
+        unchanged = save_base_resume(
+            self.connection, created["id"], "Data Leadership", "technical_executive", "Version one"
+        )
+        updated = save_base_resume(
+            self.connection, created["id"], "Data Leadership", "technical_executive", "Version two"
+        )
+
+        self.assertEqual(1, created["version_number"])
+        self.assertFalse(unchanged["version_created"])
+        self.assertEqual(1, unchanged["version_number"])
+        self.assertEqual(2, updated["version_number"])
+        self.assertEqual([2, 1], [row["version_number"] for row in list_versions(self.connection, created["id"])])
+
+    def test_restore_creates_a_new_version_and_syncs_the_active_profile(self) -> None:
+        created = save_base_resume(
+            self.connection, None, "Primary", "it", "Original"
+        )
+        activate_base_resume(self.connection, created["id"])
+        save_base_resume(self.connection, created["id"], "Primary", "it", "Edited")
+
+        restored = restore_version(self.connection, created["id"], 1)
+        profile = self.connection.execute(
+            "SELECT base_resume_text, resume_mode, suggested_keywords FROM profile WHERE id = 1"
+        ).fetchone()
+
+        self.assertEqual(3, restored["version_number"])
+        self.assertEqual("Original", get_base_resume(self.connection, created["id"])["content"])
+        self.assertEqual(("Original", "it", ""), tuple(profile))
+
+    def test_deleting_active_resume_selects_fallback_but_protects_last_resume(self) -> None:
+        first = save_base_resume(self.connection, None, "First", "it", "One")
+        second = save_base_resume(self.connection, None, "Second", "general_professional", "Two")
+        activate_base_resume(self.connection, first["id"])
+
+        replacement = delete_base_resume(self.connection, first["id"])
+        self.assertEqual(second["id"], replacement["id"])
+        self.assertEqual(second["id"], self.connection.execute(
+            "SELECT active_base_resume_id FROM profile WHERE id = 1"
+        ).fetchone()[0])
+        with self.assertRaises(LastBaseResumeError):
+            delete_base_resume(self.connection, second["id"])
+
+
 class HeadquartersPreferenceTests(unittest.TestCase):
     def test_profile_save_persists_disabled_us_preference(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1359,14 +1489,25 @@ class HeadquartersPreferenceTests(unittest.TestCase):
                     resume_mode TEXT, ai_provider TEXT, ai_model TEXT,
                     maps_provider TEXT,
                     prefer_us_headquarters INTEGER,
-                    suggested_keywords TEXT
+                    suggested_keywords TEXT, active_base_resume_id INTEGER
                 );
-                INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 'google', 1, '');
+                CREATE TABLE base_resumes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, resume_mode TEXT,
+                    content TEXT, created_at TEXT, updated_at TEXT
+                );
+                CREATE TABLE base_resume_versions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, base_resume_id INTEGER,
+                    version_number INTEGER, name TEXT, resume_mode TEXT,
+                    content TEXT, created_at TEXT
+                );
+                INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 'google', 1, '', NULL);
             """)
             connection.close()
 
             def open_test_database():
-                return sqlite3.connect(db_path)
+                test_connection = sqlite3.connect(db_path)
+                test_connection.row_factory = sqlite3.Row
+                return test_connection
 
             profile = app_module.ProfileUpdate(
                 name="Candidate", email="candidate@example.test", phone="",
@@ -2117,10 +2258,51 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
             connection.close()
         self.assertIn("source_diagnostics", tables)
         self.assertIn("headquarters_cache", tables)
+        self.assertIn("base_resumes", tables)
+        self.assertIn("base_resume_versions", tables)
         self.assertIn("idx_source_diagnostics_recorded_at", indexes)
+        self.assertIn("idx_base_resume_versions_resume", indexes)
         self.assertIn("maps_provider", profile_columns)
+        self.assertIn("active_base_resume_id", profile_columns)
         self.assertEqual("openstreetmap", maps_provider)
-        self.assertTrue({"headquarters_source", "headquarters_attribution"}.issubset(application_columns))
+        self.assertTrue({
+            "headquarters_source", "headquarters_attribution", "base_resume_id",
+            "base_resume_name", "base_resume_version",
+        }.issubset(application_columns))
+
+    def test_legacy_resume_is_migrated_once_into_named_version_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "legacy-resume.db"
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE profile (
+                    id INTEGER PRIMARY KEY, name TEXT, base_resume_text TEXT, resume_mode TEXT
+                );
+                INSERT INTO profile VALUES (1, 'Candidate', 'Legacy resume content', 'it');
+            """)
+            connection.close()
+            with patch.object(database_module, "DB_PATH", database_path):
+                database_module.init_db()
+                database_module.init_db()
+            connection = sqlite3.connect(database_path)
+            profile = connection.execute(
+                "SELECT active_base_resume_id, base_resume_text, resume_mode FROM profile WHERE id = 1"
+            ).fetchone()
+            resumes = connection.execute(
+                "SELECT id, name, content, resume_mode FROM base_resumes"
+            ).fetchall()
+            versions = connection.execute(
+                "SELECT base_resume_id, version_number, content FROM base_resume_versions"
+            ).fetchall()
+            connection.close()
+
+        self.assertEqual(1, len(resumes))
+        self.assertEqual(1, len(versions))
+        self.assertEqual("Primary Resume", resumes[0][1])
+        self.assertEqual("Legacy resume content", resumes[0][2])
+        self.assertEqual("it", resumes[0][3])
+        self.assertEqual((resumes[0][0], "Legacy resume content", "it"), profile)
+        self.assertEqual((resumes[0][0], 1, "Legacy resume content"), versions[0])
 
     def test_maps_provider_migration_preserves_google_for_existing_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2148,6 +2330,7 @@ class LifecycleSchemaTests(unittest.TestCase):
             "created_at", "tailored_at", "form_filled_at", "submitted_at",
             "confirmed_at", "application_method", "submission_evidence", "notes", "follow_up_date", "tailored_resume_text",
             "cover_letter_path", "headquarters_source", "headquarters_attribution",
+            "base_resume_id", "base_resume_name", "base_resume_version",
         }
         actual = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
         self.assertTrue(lifecycle_columns.issubset(actual))
@@ -2156,10 +2339,15 @@ class LifecycleSchemaTests(unittest.TestCase):
         profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(profile)")}
         self.assertIn("resume_mode", profile_columns)
         self.assertIn("prefer_us_headquarters", profile_columns)
+        self.assertIn("active_base_resume_id", profile_columns)
         self.assertTrue({"ai_provider", "ai_model", "openai_api_key", "maps_provider"}.issubset(profile_columns))
         self.assertEqual(1, connection.execute("PRAGMA foreign_keys").fetchone()[0])
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertTrue({"application_status_history", "saved_searches", "job_suppressions", "source_diagnostics", "headquarters_cache"}.issubset(tables))
+        self.assertTrue({
+            "application_status_history", "saved_searches", "job_suppressions",
+            "source_diagnostics", "headquarters_cache", "base_resumes",
+            "base_resume_versions",
+        }.issubset(tables))
         saved_search_columns = {row[1] for row in connection.execute("PRAGMA table_info(saved_searches)")}
         self.assertTrue({"schedule_frequency", "next_alert_at"}.issubset(saved_search_columns))
         connection.close()

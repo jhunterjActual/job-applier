@@ -47,6 +47,20 @@ from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import is_job_suppressed, record_job_suppression
 from source_diagnostics import list_source_diagnostics, persist_source_diagnostics
 from materials import cover_letter_output_path, material_download_name, persist_cover_letter, resolve_output_file
+from base_resumes import (
+    BaseResumeNotFound,
+    LastBaseResumeError,
+    MAX_BASE_RESUME_CHARS,
+    MAX_BASE_RESUME_NAME,
+    activate_base_resume,
+    delete_base_resume,
+    get_base_resume,
+    get_version,
+    list_base_resumes,
+    list_versions,
+    restore_version,
+    save_base_resume,
+)
 from operations import (
     OperationCancelled,
     OperationToken,
@@ -63,7 +77,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.8"
+APP_BUILD = "20260808.9"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -218,7 +232,9 @@ class ProfileUpdate(BaseModel):
     github: str
     linkedin: str
     website: str
-    base_resume_text: str
+    base_resume_id: Optional[int] = Field(default=None, gt=0)
+    base_resume_name: str = Field(default="Primary Resume", min_length=1, max_length=MAX_BASE_RESUME_NAME)
+    base_resume_text: str = Field(max_length=MAX_BASE_RESUME_CHARS)
     resume_mode: Literal["it", "technical_executive", "general_professional", "federal", "healthcare", "education", "sales", "trades_operations", "academic_cv", "cover_letter"] = "general_professional"
     ai_provider: Literal["gemini", "openai"] = "gemini"
     ai_model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._:/-]+$")
@@ -317,22 +333,107 @@ def update_profile(profile: ProfileUpdate) -> dict:
         dict: Success status and feedback message.
     """
     conn = get_db_connection()
-    conn.execute("""
-    UPDATE profile
-    SET name = ?, email = ?, phone = ?, github = ?, linkedin = ?, website = ?,
-        base_resume_text = ?, resume_mode = ?, ai_provider = ?, ai_model = ?,
-        maps_provider = ?, prefer_us_headquarters = ?, suggested_keywords = ''
-    WHERE id = 1
-    """, (
-        profile.name, profile.email, profile.phone, profile.github, profile.linkedin,
-        profile.website, profile.base_resume_text, profile.resume_mode,
-        profile.ai_provider, profile.ai_model, profile.maps_provider,
-        int(profile.prefer_us_headquarters),
-    ))
-    conn.commit()
-    conn.close()
-    
-    return {"success": True, "message": "Profile updated successfully."}
+    try:
+        resume = None
+        resume_id = profile.base_resume_id
+        if resume_id is None and "base_resume_id" not in profile.model_fields_set:
+            active = conn.execute(
+                "SELECT active_base_resume_id FROM profile WHERE id = 1"
+            ).fetchone()
+            resume_id = active["active_base_resume_id"] if active else None
+        if resume_id is not None or profile.base_resume_text.strip():
+            resume = save_base_resume(
+                conn,
+                resume_id,
+                profile.base_resume_name,
+                profile.resume_mode,
+                profile.base_resume_text,
+            )
+            activate_base_resume(conn, resume["id"])
+        conn.execute("""
+        UPDATE profile
+        SET name = ?, email = ?, phone = ?, github = ?, linkedin = ?, website = ?,
+            base_resume_text = ?, resume_mode = ?, ai_provider = ?, ai_model = ?,
+            maps_provider = ?, prefer_us_headquarters = ?, suggested_keywords = ''
+        WHERE id = 1
+        """, (
+            profile.name, profile.email, profile.phone, profile.github, profile.linkedin,
+            profile.website, profile.base_resume_text.strip(), profile.resume_mode,
+            profile.ai_provider, profile.ai_model, profile.maps_provider,
+            int(profile.prefer_us_headquarters),
+        ))
+        conn.commit()
+    except BaseResumeNotFound as exc:
+        conn.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+    return {
+        "success": True,
+        "message": "Profile updated successfully.",
+        "base_resume_id": resume["id"] if resume else None,
+        "base_resume_version": resume["version_number"] if resume else None,
+        "base_resume_version_created": resume["version_created"] if resume else False,
+    }
+
+
+def _resume_api_action(action):
+    conn = get_db_connection()
+    try:
+        result = action(conn)
+        conn.commit()
+        return result
+    except BaseResumeNotFound as exc:
+        conn.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LastBaseResumeError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.get("/api/base-resumes")
+def get_base_resumes() -> list[dict]:
+    return _resume_api_action(list_base_resumes)
+
+
+@app.get("/api/base-resumes/{resume_id}")
+def get_base_resume_details(resume_id: int) -> dict:
+    return _resume_api_action(lambda conn: get_base_resume(conn, resume_id))
+
+
+@app.post("/api/base-resumes/{resume_id}/activate")
+def activate_base_resume_endpoint(resume_id: int) -> dict:
+    return _resume_api_action(lambda conn: activate_base_resume(conn, resume_id))
+
+
+@app.get("/api/base-resumes/{resume_id}/versions")
+def get_base_resume_versions(resume_id: int) -> list[dict]:
+    return _resume_api_action(lambda conn: list_versions(conn, resume_id))
+
+
+@app.get("/api/base-resumes/{resume_id}/versions/{version_number}")
+def get_base_resume_version(resume_id: int, version_number: int) -> dict:
+    return _resume_api_action(lambda conn: get_version(conn, resume_id, version_number))
+
+
+@app.post("/api/base-resumes/{resume_id}/versions/{version_number}/restore")
+def restore_base_resume_version(resume_id: int, version_number: int) -> dict:
+    return _resume_api_action(lambda conn: restore_version(conn, resume_id, version_number))
+
+
+@app.delete("/api/base-resumes/{resume_id}")
+def delete_base_resume_endpoint(resume_id: int) -> dict:
+    replacement = _resume_api_action(lambda conn: delete_base_resume(conn, resume_id))
+    return {"success": True, "active_resume": replacement}
 
 
 @app.put("/api/profile/secrets")
@@ -425,8 +526,8 @@ async def upload_resume(
     operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
 ) -> dict:
     """
-    Handle uploading a base resume in text or markdown format, extract its text content,
-    and save it to the profile settings table.
+    Handle uploading a base resume in text or markdown format and return its text
+    to the editor. The user explicitly saves it as a version afterward.
     
     Args:
         file (UploadFile): The uploaded file resource.
@@ -454,18 +555,9 @@ async def upload_resume(
             raise HTTPException(status_code=400, detail="Resume files must use UTF-8 text encoding.") from exc
 
         operation.checkpoint()
-        # This short database update is the commit boundary. Once it begins,
-        # it completes atomically and is not presented as cancellable.
-        conn = get_db_connection()
-        try:
-            conn.execute("UPDATE profile SET base_resume_text = ?, suggested_keywords = '' WHERE id = 1", (resume_text,))
-            conn.commit()
-        finally:
-            conn.close()
-
         return {"success": True, "resume_text": resume_text}
     except OperationCancelled:
-        return {"success": False, "cancelled": True, "message": "Resume import stopped before profile data changed."}
+        return {"success": False, "cancelled": True, "message": "Resume import stopped before the editor changed."}
     except HTTPException:
         raise
     except Exception as exc:
@@ -1293,7 +1385,25 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     if not profile or not profile["base_resume_text"]:
         conn.close()
         raise HTTPException(status_code=400, detail="Base resume text is missing. Please setup your profile.")
-        
+
+    source_resume_id = profile["active_base_resume_id"] if "active_base_resume_id" in profile.keys() else None
+    source_resume_name = None
+    source_resume_version = None
+    if source_resume_id:
+        source_resume = conn.execute(
+            """
+            SELECT r.name, COALESCE(MAX(v.version_number), 0) AS version_number
+            FROM base_resumes r
+            LEFT JOIN base_resume_versions v ON v.base_resume_id = r.id
+            WHERE r.id = ?
+            GROUP BY r.id
+            """,
+            (source_resume_id,),
+        ).fetchone()
+        if source_resume:
+            source_resume_name = source_resume["name"]
+            source_resume_version = source_resume["version_number"]
+
     conn.close()
     
     ai_settings = settings_from_profile(profile)
@@ -1388,25 +1498,29 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
         UPDATE applications
         SET company = ?, position = ?, us_hq = ?, headquarters_source = ?, headquarters_attribution = ?,
             tailored_resume_path = ?, cover_letter_path = ?, tailored_resume_text = ?, cover_letter = ?,
-            created_at = COALESCE(created_at, ?), tailored_at = ?,
+            created_at = COALESCE(created_at, ?), tailored_at = ?, base_resume_id = ?,
+            base_resume_name = ?, base_resume_version = ?,
             status = CASE WHEN status IN ('applied', 'interview', 'offer') THEN status ELSE 'tailored' END
         WHERE job_id = ?
         """, (
             job["company"], job["title"], headquarters.address, headquarters.source,
             headquarters.attribution, str(resume_pdf_path.resolve()), str(cover_letter_path.resolve()),
-            res["tailored_resume"], cover_letter_text, now, now, job_id,
+            res["tailored_resume"], cover_letter_text, now, now, source_resume_id,
+            source_resume_name, source_resume_version, job_id,
         ))
     else:
         conn.execute("""
         INSERT INTO applications (
             job_id, company, position, date_applied, us_hq, headquarters_source,
             headquarters_attribution, tailored_resume_path, cover_letter_path,
-            tailored_resume_text, cover_letter, status, created_at, tailored_at
-        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'tailored', ?, ?)
+            tailored_resume_text, cover_letter, status, created_at, tailored_at,
+            base_resume_id, base_resume_name, base_resume_version
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'tailored', ?, ?, ?, ?, ?)
         """, (
             job_id, job["company"], job["title"], headquarters.address, headquarters.source,
             headquarters.attribution, str(resume_pdf_path.resolve()), str(cover_letter_path.resolve()),
-            res["tailored_resume"], cover_letter_text, now, now,
+            res["tailored_resume"], cover_letter_text, now, now, source_resume_id,
+            source_resume_name, source_resume_version,
         ))
         
     # Update job status to tailored
@@ -1439,6 +1553,9 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
         "manual_application_url": f"/api/jobs/{job_id}/apply-manually",
         "pdf_page_count": pdf_result["page_count"],
         "pdf_compact": pdf_result["compact"],
+        "base_resume_id": source_resume_id,
+        "base_resume_name": source_resume_name,
+        "base_resume_version": source_resume_version,
     }
 
 @app.get("/api/jobs/{job_id}/tailored")
@@ -1480,6 +1597,9 @@ def get_tailored_details(job_id: int) -> dict:
             "headquarters_source": app_row["headquarters_source"],
             "headquarters_attribution": app_row["headquarters_attribution"],
             "status": app_row["status"],
+            "base_resume_id": app_row["base_resume_id"],
+            "base_resume_name": app_row["base_resume_name"],
+            "base_resume_version": app_row["base_resume_version"],
             "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
             "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",
             "manual_application_url": f"/api/jobs/{job_id}/apply-manually",

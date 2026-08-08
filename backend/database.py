@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime
 from config import DB_PATH
 
 def get_db_connection() -> sqlite3.Connection:
@@ -43,9 +44,38 @@ def init_db() -> None:
         ai_provider TEXT NOT NULL DEFAULT 'gemini',
         ai_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash',
         maps_provider TEXT NOT NULL DEFAULT 'openstreetmap',
-        prefer_us_headquarters INTEGER NOT NULL DEFAULT 1
+        prefer_us_headquarters INTEGER NOT NULL DEFAULT 1,
+        active_base_resume_id INTEGER
     )
     """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS base_resumes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        resume_mode TEXT NOT NULL DEFAULT 'general_professional',
+        content TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS base_resume_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        base_resume_id INTEGER NOT NULL,
+        version_number INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        resume_mode TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE(base_resume_id, version_number),
+        FOREIGN KEY (base_resume_id) REFERENCES base_resumes(id) ON DELETE CASCADE
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_base_resume_versions_resume ON base_resume_versions(base_resume_id, version_number DESC)"
+    )
     
     # Jobs table (postings found/scraped)
     cursor.execute("""
@@ -112,6 +142,9 @@ def init_db() -> None:
         follow_up_date TEXT,
         headquarters_source TEXT,
         headquarters_attribution TEXT,
+        base_resume_id INTEGER,
+        base_resume_name TEXT,
+        base_resume_version INTEGER,
         FOREIGN KEY (job_id) REFERENCES jobs(id)
     )
     """)
@@ -170,6 +203,7 @@ def init_db() -> None:
     """)
     
     # Check and add suggested_keywords column if it doesn't exist
+    _add_column_if_missing(cursor, "profile", "base_resume_text", "TEXT DEFAULT ''")
     _add_column_if_missing(cursor, "profile", "suggested_keywords", "TEXT DEFAULT ''")
     _add_column_if_missing(cursor, "profile", "google_maps_api_key", "TEXT DEFAULT ''")
     _add_column_if_missing(cursor, "profile", "openai_api_key", "TEXT DEFAULT ''")
@@ -178,6 +212,7 @@ def init_db() -> None:
     _add_column_if_missing(cursor, "profile", "maps_provider", "TEXT NOT NULL DEFAULT 'google'")
     _add_column_if_missing(cursor, "profile", "resume_mode", "TEXT DEFAULT 'general_professional'")
     _add_column_if_missing(cursor, "profile", "prefer_us_headquarters", "INTEGER NOT NULL DEFAULT 1")
+    _add_column_if_missing(cursor, "profile", "active_base_resume_id", "INTEGER")
     _add_column_if_missing(cursor, "jobs", "archived_at", "TEXT")
     _add_column_if_missing(cursor, "jobs", "archived_from_status", "TEXT")
     _add_column_if_missing(cursor, "jobs", "last_checked_at", "TEXT")
@@ -204,6 +239,9 @@ def init_db() -> None:
     _add_column_if_missing(cursor, "applications", "cover_letter_path", "TEXT")
     _add_column_if_missing(cursor, "applications", "headquarters_source", "TEXT")
     _add_column_if_missing(cursor, "applications", "headquarters_attribution", "TEXT")
+    _add_column_if_missing(cursor, "applications", "base_resume_id", "INTEGER")
+    _add_column_if_missing(cursor, "applications", "base_resume_name", "TEXT")
+    _add_column_if_missing(cursor, "applications", "base_resume_version", "INTEGER")
     _add_column_if_missing(cursor, "saved_searches", "schedule_frequency", "TEXT DEFAULT 'none'")
     _add_column_if_missing(cursor, "saved_searches", "next_alert_at", "TEXT")
 
@@ -250,6 +288,36 @@ def init_db() -> None:
         )
         VALUES ('', '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 'openstreetmap', '', '')
         """)
+
+    # Preserve an existing user's resume by migrating it into a named, versioned
+    # record. Keep the legacy profile fields synchronized for compatibility with
+    # current search and tailoring code.
+    profile = cursor.execute(
+        "SELECT active_base_resume_id, base_resume_text, resume_mode FROM profile WHERE id = 1"
+    ).fetchone()
+    if profile and profile[0] is None and (profile[1] or "").strip():
+        now = datetime.now().isoformat(timespec="seconds")
+        resume_mode = profile[2] or "general_professional"
+        resume_cursor = cursor.execute(
+            """
+            INSERT INTO base_resumes (name, resume_mode, content, created_at, updated_at)
+            VALUES ('Primary Resume', ?, ?, ?, ?)
+            """,
+            (resume_mode, profile[1], now, now),
+        )
+        resume_id = resume_cursor.lastrowid
+        cursor.execute(
+            """
+            INSERT INTO base_resume_versions (
+                base_resume_id, version_number, name, resume_mode, content, created_at
+            ) VALUES (?, 1, 'Primary Resume', ?, ?, ?)
+            """,
+            (resume_id, resume_mode, profile[1], now),
+        )
+        cursor.execute(
+            "UPDATE profile SET active_base_resume_id = ? WHERE id = 1",
+            (resume_id,),
+        )
     # Clean up any previously stored junk/closed postings
     cursor.execute("""
     DELETE FROM jobs 

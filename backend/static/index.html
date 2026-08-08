@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-7">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-9">
 </head>
 <body>
     <div class="app-container">
@@ -266,9 +266,26 @@
 
                     <!-- Right: Base Resume -->
                     <div class="card flex-column">
-                        <div class="card-header justify-between">
-                            <h2>Base Resume Content</h2>
-                            <div class="resume-upload-actions">
+                        <div class="card-header resume-card-header">
+                            <div class="resume-card-title">
+                                <h2>Base Resumes</h2>
+                                <select id="base-resume-select" aria-label="Selected base resume">
+                                    <option value="">Unsaved resume</option>
+                                </select>
+                            </div>
+                            <div class="resume-library-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" id="new-base-resume-btn">
+                                    <i class="fa-solid fa-plus"></i> New
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="duplicate-base-resume-btn">
+                                    <i class="fa-solid fa-copy"></i> Duplicate
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="base-resume-history-btn">
+                                    <i class="fa-solid fa-clock-rotate-left"></i> History
+                                </button>
+                                <button type="button" class="btn btn-danger btn-sm" id="delete-base-resume-btn">
+                                    <i class="fa-solid fa-trash"></i> Delete
+                                </button>
                                 <label for="resume-file-upload" class="btn btn-secondary btn-sm">
                                     <i class="fa-solid fa-file-upload"></i> Upload Text File
                                 </label>
@@ -276,8 +293,12 @@
                             </div>
                         </div>
                         <div class="card-body flex-grow flex-column">
+                            <div class="form-group margin-bottom-md">
+                                <label for="p-resume-name">Resume name</label>
+                                <input type="text" id="p-resume-name" maxlength="120" placeholder="e.g. Data Leadership" required>
+                            </div>
                             <textarea id="p-resume" class="resume-textarea flex-grow" placeholder="Paste your resume content in Plain Text or Markdown format here..." required></textarea>
-                            <small class="form-help margin-top-sm">Using clear headings like 'EXPERIENCE', 'PROJECTS', and 'EDUCATION' helps the LLM tailor it more accurately.</small>
+                            <small class="form-help margin-top-sm">Meaningful changes create a restorable version when you click Save Settings. Clear headings like 'EXPERIENCE', 'PROJECTS', and 'EDUCATION' improve tailoring.</small>
                         </div>
                     </div>
                 </div>
@@ -745,6 +766,35 @@
         </div>
     </div>
 
+    <!-- Base Resume History Modal -->
+    <div class="modal" id="base-resume-history-modal" role="dialog" aria-modal="true" aria-labelledby="base-resume-history-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h2 id="base-resume-history-title">Resume Version History</h2>
+                    <p class="text-muted" id="base-resume-history-subtitle"></p>
+                </div>
+                <button type="button" class="close-modal-btn" id="close-base-resume-history-modal" aria-label="Close resume version history">&times;</button>
+            </div>
+            <div class="modal-body resume-history-layout">
+                <div class="resume-version-list" id="base-resume-version-list" aria-label="Saved resume versions"></div>
+                <div class="resume-version-preview">
+                    <h3 id="base-resume-version-preview-title">Select a version to preview</h3>
+                    <pre id="base-resume-version-preview-content" tabindex="0"></pre>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <p class="form-help resume-history-help">Restoring creates a new version; it does not erase later history.</p>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="close-base-resume-history-modal-btn">Close</button>
+                    <button type="button" class="btn btn-primary" id="restore-base-resume-version-btn" disabled>
+                        <i class="fa-solid fa-clock-rotate-left"></i> Restore Selected Version
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Loading / Applying Modal -->
     <div class="modal modal-sm" id="loading-modal" role="dialog" aria-modal="true" aria-labelledby="loading-title" aria-describedby="loading-subtitle">
         <div class="modal-content text-center">
@@ -762,6 +812,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-7"></script>
+    <script src="/static/app.js?v=20260808-9"></script>
 </body>
 </html>
