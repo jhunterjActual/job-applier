@@ -1,8 +1,11 @@
-# AI Job Search & Application Agent
+# CareerTrellis
+
+*Find, tailor, track, and prepare—on your terms.*
 
 See [PRODUCT_BACKLOG.md](PRODUCT_BACKLOG.md) for the consolidated implementation and product roadmap.
+See [BRAND_NAMING.md](BRAND_NAMING.md) for the working-name rationale, voice guardrails, and pre-launch clearance checklist.
 
-A self-contained AI-powered assistant designed to streamline job discovery, resume tailoring, and a reliable guided-manual application process.
+A self-contained, privacy-first workspace designed to streamline job discovery, resume tailoring, guided-manual applications, progress tracking, and interview preparation.
 
 The application features a **FastAPI backend** that doubles as a static file server to deliver a **custom, premium dark-mode dashboard** built with clean, native web technologies (no NPM or React build pipeline required).
 
@@ -182,11 +185,11 @@ The app is designed for local access at `127.0.0.1`. It rejects non-loopback Hos
 
 ### Optional anonymous analytics
 
-PostHog analytics is disabled unless `POSTHOG_PROJECT_TOKEN` is present in the process environment. `POSTHOG_HOST` is optional and defaults to the US ingestion endpoint; use the ingestion host for your PostHog region. The variable names are also listed in `backend/.env.example`, but JobApplier does not automatically read `.env` files or include any real token in the repository.
+PostHog analytics is disabled unless `POSTHOG_PROJECT_TOKEN` is present in the process environment. `POSTHOG_HOST` is optional and defaults to the US ingestion endpoint; use the ingestion host for your PostHog region. The variable names are also listed in `backend/.env.example`, but CareerTrellis does not automatically read `.env` files or include any real token in the repository.
 
-When enabled, JobApplier creates a random installation UUID in the local ignored `data/` directory. It never uses the profile database ID and does not identify a person. Only `job_search_started`, `resume_tailored`, `manual_application_opened`, `material_downloaded`, and `job_lifecycle_updated` are sent, with allowlisted low-cardinality status, source-category, material-type, lifecycle-transition, duration-bucket, and application-version properties. Names, contact details, résumé or application text, employer and job details, URLs, search terms, filenames, paths, API keys, and database content are never included.
+When enabled, CareerTrellis creates a random installation UUID in the local ignored `data/` directory. It never uses the profile database ID and does not identify a person. Only `job_search_started`, `resume_tailored`, `manual_application_opened`, `material_downloaded`, and `job_lifecycle_updated` are sent, with allowlisted low-cardinality status, source-category, material-type, lifecycle-transition, duration-bucket, and application-version properties. Names, contact details, résumé or application text, employer and job details, URLs, search terms, filenames, paths, API keys, and database content are never included.
 
-Analytics capture is isolated from request handling and uses short network timeouts. Failures are silently dropped. GeoIP enrichment, session replay, automatic exception capture, and local-variable capture are disabled. To opt out, remove `POSTHOG_PROJECT_TOKEN` and restart JobApplier; the local installation UUID may be deleted separately if you do not plan to re-enable analytics.
+Analytics capture is isolated from request handling and uses short network timeouts. Failures are silently dropped. GeoIP enrichment, session replay, automatic exception capture, and local-variable capture are disabled. To opt out, remove `POSTHOG_PROJECT_TOKEN` and restart CareerTrellis; the local installation UUID may be deleted separately if you do not plan to re-enable analytics.
 
 ### Startup troubleshooting
 

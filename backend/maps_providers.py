@@ -25,7 +25,7 @@ OPENSTREETMAP_ATTRIBUTION = "© OpenStreetMap contributors"
 MAX_MAPS_RESPONSE_BYTES = 1024 * 1024
 MAPS_TIMEOUT_SECONDS = 12
 NOMINATIM_MIN_INTERVAL_SECONDS = 1.0
-NOMINATIM_USER_AGENT = "JobApplierAgent/1.0 (local single-user app; https://github.com/jhunterjActual/job-applier)"
+NOMINATIM_USER_AGENT = "CareerTrellis/1.0 (local single-user app; https://github.com/jhunterjActual/job-applier)"
 
 _nominatim_lock = threading.Lock()
 _last_nominatim_request_at = 0.0
@@ -173,7 +173,7 @@ def _query_google(settings: MapsProviderSettings, query: str) -> list[Headquarte
             "Content-Type": "application/json",
             "X-Goog-Api-Key": settings.api_key,
             "X-Goog-FieldMask": "places.formattedAddress,places.addressComponents",
-            "User-Agent": "JobApplierAgent/1.0",
+            "User-Agent": "CareerTrellis/1.0",
         },
         method="POST",
     )

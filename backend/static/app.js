@@ -580,7 +580,7 @@ function setupModalTabs() {
 }
 
 // Show/Hide Helpers
-function showLoading(title, subtitle = "Please wait while JobApplier prepares your request.", operation = null) {
+function showLoading(title, subtitle = "Please wait while CareerTrellis prepares your request.", operation = null) {
     loadingTitle.innerText = title;
     loadingSubtitle.innerText = subtitle;
     activeLoadingOperation = operation;
@@ -609,7 +609,7 @@ function showCancellableLoading(title, subtitle) {
 }
 
 function operationHeaders(operation, headers = {}) {
-    return { ...headers, "X-JobApplier-Operation": operation.id };
+    return { ...headers, "X-CareerTrellis-Operation": operation.id };
 }
 
 async function stopActiveLoadingOperation() {

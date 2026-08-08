@@ -255,7 +255,7 @@ def _generate_openai(settings: AIProviderSettings, prompt: str, schema: type[Bas
         headers={
             "Authorization": f"Bearer {settings.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "JobApplierAgent/1",
+            "User-Agent": "CareerTrellis/1",
         },
         method="POST",
     )
@@ -323,7 +323,7 @@ def _generate_openai_image_text(settings: AIProviderSettings, prompt: str, image
         headers={
             "Authorization": f"Bearer {settings.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "JobApplierAgent/1",
+            "User-Agent": "CareerTrellis/1",
         },
         method="POST",
     )

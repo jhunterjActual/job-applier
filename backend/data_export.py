@@ -3,7 +3,7 @@ import sqlite3
 from typing import Any
 
 
-EXPORT_FORMAT = "job-applier-user-data"
+EXPORT_FORMAT = "career-trellis-user-data"
 EXPORT_SCHEMA_VERSION = 1
 
 

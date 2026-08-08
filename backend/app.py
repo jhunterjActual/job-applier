@@ -91,7 +91,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.15"
+APP_BUILD = "20260808.16"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -182,7 +182,7 @@ async def lifespan(app: FastAPI):
         shutdown_analytics(timeout_seconds=0.5)
 
 
-app = FastAPI(title="AI Job Applier Agent API", lifespan=lifespan)
+app = FastAPI(title="CareerTrellis API", lifespan=lifespan)
 
 
 def _local_authority(authority: str, scheme: str = "http") -> Optional[tuple[str, int]]:
@@ -508,7 +508,7 @@ def update_profile_secrets(secrets: ProfileSecretsUpdate) -> dict:
 
 @app.post("/api/profile/ai-provider/validate")
 def validate_ai_provider(
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """Validate the selected provider's stored key, model, and structured output."""
     with operation_scope(operation_id) as operation:
@@ -531,7 +531,7 @@ def validate_ai_provider(
 
 @app.post("/api/profile/maps-provider/validate")
 def validate_selected_maps_provider(
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """Validate the selected maps provider without exposing its credential."""
     with operation_scope(operation_id) as operation:
@@ -554,7 +554,7 @@ def validate_selected_maps_provider(
 async def upload_resume(
     file: UploadFile = File(...),
     allow_ocr: bool = Form(False),
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """
     Import a text, Markdown, DOCX, or PDF base resume and return editable text.
@@ -732,7 +732,7 @@ def get_jobs(include_archived: bool = False) -> list[dict]:
 @app.post("/api/jobs/import/preview")
 def preview_manual_job(
     req: ManualJobPreviewRequest,
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """Validate a public posting URL and extract editable details without saving it."""
     with operation_scope(operation_id) as operation:
@@ -845,7 +845,7 @@ def _preview_manual_job(req: ManualJobPreviewRequest, operation: OperationToken)
 @app.post("/api/jobs/import")
 def save_manual_job(
     req: ManualJobSaveRequest,
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """Save one reviewed posting and score it when the configured AI is available."""
     with operation_scope(operation_id) as operation:
@@ -1215,7 +1215,7 @@ def export_user_data() -> StreamingResponse:
         )
     finally:
         conn.close()
-    filename = f"job-applier-user-data-{date.today().isoformat()}.json"
+    filename = f"career-trellis-user-data-{date.today().isoformat()}.json"
     content = json.JSONEncoder(ensure_ascii=False, indent=2).iterencode(payload)
     return StreamingResponse(
         content=content,
@@ -1242,7 +1242,7 @@ def export_source_diagnostic_history() -> JSONResponse:
         "record_count": history["count"],
         "diagnostics": history["items"],
     }
-    filename = f"job-applier-source-diagnostics-{date.today().isoformat()}.json"
+    filename = f"career-trellis-source-diagnostics-{date.today().isoformat()}.json"
     return JSONResponse(
         payload,
         headers={
@@ -1303,7 +1303,7 @@ def delete_saved_search(search_id: int) -> dict:
 @app.post("/api/jobs/{job_id}/verify")
 def verify_job_posting(
     job_id: int,
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """Re-scrape one listing and mark it expired without deleting history."""
     with operation_scope(operation_id) as operation:
@@ -1365,7 +1365,7 @@ def _verify_job_posting(job_id: int, operation: OperationToken) -> dict:
 def search_jobs(
     req: SearchRequest,
     background_tasks: BackgroundTasks,
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """
     Start a background job crawl and match analysis task using the user keywords and locations.
@@ -1436,7 +1436,7 @@ def search_jobs(
 @app.post("/api/jobs/{job_id}/tailor")
 def tailor_resume_endpoint(
     job_id: int,
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """
     Generate a tailored resume and cover letter for a specific job matching the candidate's profile.
@@ -1704,7 +1704,7 @@ def get_tailored_details(job_id: int) -> dict:
 def update_tailored_details(
     job_id: int,
     req: MaterialsUpdateRequest,
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """Save reviewed material edits and regenerate the attached resume PDF."""
     with operation_scope(operation_id) as operation:
@@ -1988,7 +1988,7 @@ def update_interview_prep(job_id: int, req: InterviewPrepUpdateRequest) -> dict:
 @app.post("/api/jobs/{job_id}/interview-prep/generate")
 def generate_job_interview_prep(
     job_id: int,
-    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
 ) -> dict:
     """Generate and safely persist an AI-assisted interview plan on explicit request."""
     with operation_scope(operation_id) as operation:

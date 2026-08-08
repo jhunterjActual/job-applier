@@ -1,4 +1,4 @@
-# Start Script for AI Job Applier Agent
+# Start Script for CareerTrellis
 param(
     [ValidateRange(1, 65535)]
     [int]$Port = 8001
@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "   Starting AI Job Applier Agent...       " -ForegroundColor Cyan
+Write-Host "   Starting CareerTrellis...              " -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -79,7 +79,7 @@ if ($NeedsEnvironmentRebuild) {
                 Move-Item -LiteralPath $VenvDir -Destination $BackupVenvDir
                 $OldEnvironmentMoved = $true
             } catch {
-                throw "Unable to replace the virtual environment. Stop any running Job Applier copy with Ctrl+C, then run this script again."
+                throw "Unable to replace the virtual environment. Stop any running CareerTrellis copy with Ctrl+C, then run this script again."
             }
         }
         $ReplacementStarted = $true
@@ -105,7 +105,7 @@ if ($NeedsEnvironmentRebuild) {
             try {
                 Remove-Item -LiteralPath $BackupVenvDir -Recurse -Force
             } catch {
-                Write-Warning "The previous environment remains at $BackupVenvDir and can be removed after the older Job Applier process stops."
+                Write-Warning "The previous environment remains at $BackupVenvDir and can be removed after the older CareerTrellis process stops."
             }
         }
     } catch {
@@ -134,8 +134,8 @@ Start-Job -ArgumentList $Port -ScriptBlock {
         Start-Sleep -Seconds 1
         try {
             $version = Invoke-RestMethod "http://127.0.0.1:$Port/api/version" -TimeoutSec 1
-            if ($version.build -eq "20260808.15") {
-                Start-Process "http://127.0.0.1:$Port/?build=20260808.15"
+            if ($version.build -eq "20260808.16") {
+                Start-Process "http://127.0.0.1:$Port/?build=20260808.16"
                 return
             }
         } catch { }
@@ -145,5 +145,5 @@ Start-Job -ArgumentList $Port -ScriptBlock {
 
 Write-Host "Launching FastAPI Backend..." -ForegroundColor Yellow
 Write-Host "Access the Dashboard at http://127.0.0.1:$Port/" -ForegroundColor Green
-Write-Host "Press Ctrl+C to shut down the agent." -ForegroundColor Magenta
+Write-Host "Press Ctrl+C to stop CareerTrellis." -ForegroundColor Magenta
 & $VenvPython -m uvicorn app:app --host 127.0.0.1 --port $Port --reload

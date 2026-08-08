@@ -345,7 +345,7 @@ def _lever_posting_from_api(url: str) -> dict:
     site, posting_id = segments
     api_host = "api.eu.lever.co" if parsed.hostname == "jobs.eu.lever.co" else "api.lever.co"
     api_url = f"https://{api_host}/v0/postings/{urllib.parse.quote(site, safe='')}/{urllib.parse.quote(posting_id, safe='')}"
-    request = urllib.request.Request(api_url, headers={"Accept": "application/json", "User-Agent": "JobApplier/1.0"})
+    request = urllib.request.Request(api_url, headers={"Accept": "application/json", "User-Agent": "CareerTrellis/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=12) as response:
             payload = response.read(MAX_LEVER_API_BYTES + 1)
