@@ -18,6 +18,10 @@ let loadedJobs = [];
 let jobImportCanonicalUrl = null;
 let sourceDiagnosticsOpener = null;
 let activeLoadingOperation = null;
+let baseResumes = [];
+let currentBaseResumeId = null;
+let baseResumeSnapshot = null;
+let selectedBaseResumeVersion = null;
 
 // DOM Elements
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -51,6 +55,12 @@ const pGoogleKeyStatus = document.getElementById("p-google-key-status");
 const pGoogleKeyHelp = document.getElementById("p-google-key-help");
 const pResume = document.getElementById("p-resume");
 const pResumeMode = document.getElementById("p-resume-mode");
+const pResumeName = document.getElementById("p-resume-name");
+const baseResumeSelect = document.getElementById("base-resume-select");
+const newBaseResumeBtn = document.getElementById("new-base-resume-btn");
+const duplicateBaseResumeBtn = document.getElementById("duplicate-base-resume-btn");
+const baseResumeHistoryBtn = document.getElementById("base-resume-history-btn");
+const deleteBaseResumeBtn = document.getElementById("delete-base-resume-btn");
 const pPreferUsHeadquarters = document.getElementById("p-prefer-us-headquarters");
 const resumeFileUpload = document.getElementById("resume-file-upload");
 const toggleApiVisibilityBtn = document.getElementById("toggle-api-visibility");
@@ -162,6 +172,16 @@ const lifecycleAppliedCalendar = document.getElementById("lifecycle-applied-cale
 const lifecycleFollowUpCalendar = document.getElementById("lifecycle-follow-up-calendar");
 const lifecycleNotes = document.getElementById("lifecycle-notes");
 const undoLifecycleBtn = document.getElementById("undo-lifecycle-btn");
+const baseResumeHistoryModal = document.getElementById("base-resume-history-modal");
+const baseResumeHistorySubtitle = document.getElementById("base-resume-history-subtitle");
+const baseResumeVersionList = document.getElementById("base-resume-version-list");
+const baseResumeVersionPreviewTitle = document.getElementById("base-resume-version-preview-title");
+const baseResumeVersionPreviewContent = document.getElementById("base-resume-version-preview-content");
+const restoreBaseResumeVersionBtn = document.getElementById("restore-base-resume-version-btn");
+const closeBaseResumeHistoryBtns = [
+    document.getElementById("close-base-resume-history-modal"),
+    document.getElementById("close-base-resume-history-modal-btn")
+].filter(Boolean);
 
 // Initialize on Load
 document.addEventListener("DOMContentLoaded", () => {
@@ -179,6 +199,14 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(pGoogleApiKey, "input", markMapsProviderSettingsDirty);
     bindEvent(testMapsProviderBtn, "click", testSavedMapsProvider);
     bindEvent(resumeFileUpload, "change", handleResumeUpload);
+    bindEvent(pResume, "input", updateBaseResumeActions);
+    bindEvent(baseResumeSelect, "change", selectBaseResume);
+    bindEvent(newBaseResumeBtn, "click", startNewBaseResume);
+    bindEvent(duplicateBaseResumeBtn, "click", beginBaseResumeCopy);
+    bindEvent(baseResumeHistoryBtn, "click", showBaseResumeHistory);
+    bindEvent(deleteBaseResumeBtn, "click", removeBaseResume);
+    closeBaseResumeHistoryBtns.forEach(btn => btn.addEventListener("click", hideBaseResumeHistory));
+    bindEvent(restoreBaseResumeVersionBtn, "click", restoreSelectedBaseResumeVersion);
     bindEvent(searchForm, "submit", searchJobs);
     bindEvent(refreshJobsBtn, "click", loadJobs);
     bindEvent(cleanupJobsBtn, "click", showCleanupPreview);
@@ -226,6 +254,9 @@ document.addEventListener("DOMContentLoaded", () => {
     document.addEventListener("keydown", event => {
         if (event.key === "Escape" && sourceDiagnosticsModal.classList.contains("active")) {
             hideSourceDiagnostics();
+        }
+        if (event.key === "Escape" && baseResumeHistoryModal.classList.contains("active")) {
+            hideBaseResumeHistory();
         }
     });
 });
@@ -1016,7 +1047,9 @@ async function loadProfile() {
             updateStartupActivity(profile);
             pResume.value = profile.base_resume_text || "";
             pResumeMode.value = profile.resume_mode || "general_professional";
+            pResumeName.value = "Primary Resume";
             pPreferUsHeadquarters.checked = profile.prefer_us_headquarters !== 0;
+            await loadBaseResumeLibrary(profile.active_base_resume_id);
             
             userDisplayName.innerText = profile.name || "Candidate";
             // Sync dashboard statistics
@@ -1036,6 +1069,11 @@ async function loadProfile() {
 // Save Candidate Profile
 async function saveProfile(e) {
     e.preventDefault();
+    if (pResume.value.trim() && !pResumeName.value.trim()) {
+        alert("Enter a name for this base resume before saving.");
+        pResumeName.focus();
+        return;
+    }
     showLoading("Saving Profile...", "Storing settings into your local database.");
     
     const payload = {
@@ -1045,6 +1083,8 @@ async function saveProfile(e) {
         github: pGithub.value.trim(),
         linkedin: pLinkedin.value.trim(),
         website: pWebsite.value.trim(),
+        base_resume_id: currentBaseResumeId,
+        base_resume_name: pResumeName.value.trim() || "Primary Resume",
         base_resume_text: pResume.value.trim(),
         resume_mode: pResumeMode.value,
         ai_provider: selectedAIProvider(),
@@ -1083,20 +1123,217 @@ async function saveProfile(e) {
         }
         
         if (result.success) {
+            currentBaseResumeId = result.base_resume_id || currentBaseResumeId;
+            await loadBaseResumeLibrary(currentBaseResumeId);
             userDisplayName.innerText = payload.name || "Candidate";
             aiProviderSettingsSaved = true;
             mapsProviderSettingsSaved = true;
             updateSecretStatuses();
             updateStartupActivity(payload);
-            logActivity("Profile Saved", `Contact details and ${selectedAIProviderMeta().label} settings saved.`, "success");
+            const versionNote = result.base_resume_version_created
+                ? ` Resume version ${result.base_resume_version} created.`
+                : " Resume content was unchanged; no duplicate version was created.";
+            logActivity("Profile Saved", `Contact details and ${selectedAIProviderMeta().label} settings saved.${versionNote}`, "success");
             hideLoading();
             alert("Profile settings saved successfully!");
         }
     } catch (err) {
         hideLoading();
         console.error(err);
+        alert(err.message || "Could not save profile settings.");
         logActivity("Profile Save Failed", "Error storing profile adjustments.", "error");
     }
+}
+
+function baseResumeEditorState() {
+    return {
+        id: currentBaseResumeId,
+        name: pResumeName.value.trim(),
+        resume_mode: pResumeMode.value,
+        content: pResume.value.trim()
+    };
+}
+
+function rememberBaseResumeSnapshot() {
+    baseResumeSnapshot = JSON.stringify(baseResumeEditorState());
+}
+
+function baseResumeEditorIsDirty() {
+    return baseResumeSnapshot !== null && JSON.stringify(baseResumeEditorState()) !== baseResumeSnapshot;
+}
+
+function updateBaseResumeActions() {
+    const savedResumeSelected = Number.isInteger(currentBaseResumeId);
+    baseResumeHistoryBtn.disabled = !savedResumeSelected;
+    deleteBaseResumeBtn.disabled = !savedResumeSelected;
+    duplicateBaseResumeBtn.disabled = !pResume.value.trim();
+}
+
+async function loadBaseResumeLibrary(preferredId = null) {
+    const response = await fetch(`${API_URL}/api/base-resumes`);
+    if (!response.ok) throw new Error("Could not load the base resume library.");
+    baseResumes = await response.json();
+    baseResumeSelect.replaceChildren();
+    if (!baseResumes.length) {
+        const option = new Option("Unsaved resume", "");
+        baseResumeSelect.add(option);
+        currentBaseResumeId = null;
+        pResumeName.value = pResumeName.value || "Primary Resume";
+        rememberBaseResumeSnapshot();
+        updateBaseResumeActions();
+        return;
+    }
+
+    baseResumes.forEach(resume => {
+        const label = `${resume.name} · ${resume.version_count} version${resume.version_count === 1 ? "" : "s"}${resume.active ? " · Active" : ""}`;
+        baseResumeSelect.add(new Option(label, String(resume.id)));
+    });
+    const selected = baseResumes.find(resume => resume.id === Number(preferredId))
+        || baseResumes.find(resume => resume.active)
+        || baseResumes[0];
+    await loadBaseResumeDetails(selected.id, false);
+}
+
+async function loadBaseResumeDetails(resumeId, activate = false) {
+    if (activate) {
+        const activation = await fetch(`${API_URL}/api/base-resumes/${resumeId}/activate`, { method: "POST" });
+        const activationResult = await activation.json();
+        if (!activation.ok) throw new Error(activationResult.detail || "Could not select the base resume.");
+    }
+    const response = await fetch(`${API_URL}/api/base-resumes/${resumeId}`);
+    const resume = await response.json();
+    if (!response.ok) throw new Error(resume.detail || "Could not load the base resume.");
+    currentBaseResumeId = Number(resume.id);
+    baseResumeSelect.value = String(resume.id);
+    pResumeName.value = resume.name;
+    pResumeMode.value = resume.resume_mode;
+    pResume.value = resume.content;
+    rememberBaseResumeSnapshot();
+    updateBaseResumeActions();
+}
+
+async function selectBaseResume() {
+    const resumeId = Number(baseResumeSelect.value);
+    if (!resumeId || resumeId === currentBaseResumeId) return;
+    if (baseResumeEditorIsDirty() && !confirm("Discard unsaved resume edits and select another base resume?")) {
+        baseResumeSelect.value = currentBaseResumeId ? String(currentBaseResumeId) : "";
+        return;
+    }
+    try {
+        await loadBaseResumeDetails(resumeId, true);
+        await loadBaseResumeLibrary(resumeId);
+        logActivity("Base Resume Selected", `${pResumeName.value} is now used for tailoring.`, "success");
+    } catch (error) {
+        alert(error.message);
+        baseResumeSelect.value = currentBaseResumeId ? String(currentBaseResumeId) : "";
+    }
+}
+
+function startNewBaseResume() {
+    if (baseResumeEditorIsDirty() && !confirm("Discard unsaved resume edits and start a new base resume?")) return;
+    currentBaseResumeId = null;
+    baseResumeSelect.value = "";
+    if (!baseResumeSelect.querySelector('option[value=""]')) {
+        baseResumeSelect.insertBefore(new Option("Unsaved resume", ""), baseResumeSelect.firstChild);
+    }
+    pResumeName.value = "New Resume";
+    pResumeMode.value = "general_professional";
+    pResume.value = "";
+    baseResumeSnapshot = "__unsaved_new_resume__";
+    updateBaseResumeActions();
+    pResumeName.focus();
+}
+
+function beginBaseResumeCopy() {
+    const sourceName = pResumeName.value.trim() || "Resume";
+    currentBaseResumeId = null;
+    if (!baseResumeSelect.querySelector('option[value=""]')) {
+        baseResumeSelect.insertBefore(new Option("Unsaved copy", ""), baseResumeSelect.firstChild);
+    }
+    baseResumeSelect.value = "";
+    pResumeName.value = `Copy of ${sourceName}`.slice(0, 120);
+    baseResumeSnapshot = "__unsaved_resume_copy__";
+    updateBaseResumeActions();
+    pResumeName.focus();
+    pResumeName.select();
+}
+
+async function removeBaseResume() {
+    if (!currentBaseResumeId) return;
+    const unsavedWarning = baseResumeEditorIsDirty() ? " Unsaved edits will also be discarded." : "";
+    if (!confirm(`Delete “${pResumeName.value}” and all of its saved versions?${unsavedWarning}`)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/base-resumes/${currentBaseResumeId}`, { method: "DELETE" });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not delete the base resume.");
+        await loadBaseResumeLibrary(result.active_resume?.id || null);
+        logActivity("Base Resume Deleted", "The resume and its version history were removed.", "success");
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+async function showBaseResumeHistory() {
+    if (!currentBaseResumeId) return;
+    try {
+        const response = await fetch(`${API_URL}/api/base-resumes/${currentBaseResumeId}/versions`);
+        const versions = await response.json();
+        if (!response.ok) throw new Error(versions.detail || "Could not load resume history.");
+        baseResumeHistorySubtitle.textContent = pResumeName.value;
+        baseResumeVersionList.replaceChildren();
+        baseResumeVersionPreviewTitle.textContent = "Select a version to preview";
+        baseResumeVersionPreviewContent.textContent = "";
+        selectedBaseResumeVersion = null;
+        restoreBaseResumeVersionBtn.disabled = true;
+        versions.forEach(version => {
+            const button = createElement("button", "resume-version-item");
+            button.type = "button";
+            button.appendChild(createElement("strong", "", `Version ${version.version_number} · ${version.name}`));
+            button.appendChild(createElement("span", "", `${new Date(version.created_at).toLocaleString()} · ${version.character_count.toLocaleString()} characters`));
+            button.addEventListener("click", () => previewBaseResumeVersion(version.version_number, button));
+            baseResumeVersionList.appendChild(button);
+        });
+        baseResumeHistoryModal.classList.add("active");
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+async function previewBaseResumeVersion(versionNumber, button) {
+    const response = await fetch(`${API_URL}/api/base-resumes/${currentBaseResumeId}/versions/${versionNumber}`);
+    const version = await response.json();
+    if (!response.ok) {
+        alert(version.detail || "Could not preview this resume version.");
+        return;
+    }
+    baseResumeVersionList.querySelectorAll(".resume-version-item").forEach(item => item.classList.remove("selected"));
+    button.classList.add("selected");
+    selectedBaseResumeVersion = versionNumber;
+    baseResumeVersionPreviewTitle.textContent = `Version ${versionNumber} · ${version.name}`;
+    baseResumeVersionPreviewContent.textContent = version.content;
+    restoreBaseResumeVersionBtn.disabled = false;
+}
+
+async function restoreSelectedBaseResumeVersion() {
+    if (!currentBaseResumeId || !selectedBaseResumeVersion) return;
+    const unsavedWarning = baseResumeEditorIsDirty() ? " Unsaved editor changes will be discarded." : "";
+    if (!confirm(`Restore version ${selectedBaseResumeVersion}? A new version will preserve this change.${unsavedWarning}`)) return;
+    const restoredFromVersion = selectedBaseResumeVersion;
+    try {
+        const response = await fetch(`${API_URL}/api/base-resumes/${currentBaseResumeId}/versions/${selectedBaseResumeVersion}/restore`, { method: "POST" });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not restore the resume version.");
+        hideBaseResumeHistory();
+        await loadBaseResumeLibrary(currentBaseResumeId);
+        logActivity("Resume Version Restored", `Version ${restoredFromVersion} was restored as version ${result.version_number}.`, "success");
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+function hideBaseResumeHistory() {
+    baseResumeHistoryModal.classList.remove("active");
+    selectedBaseResumeVersion = null;
 }
 
 async function testSavedMapsProvider() {
@@ -1185,6 +1422,7 @@ async function handleResumeUpload(e) {
             alert(result.message || "Resume import stopped.");
         } else if (result.success) {
             pResume.value = result.resume_text;
+            updateBaseResumeActions();
             logActivity("Resume File Uploaded", `Imported text from ${file.name}. Click 'Save Settings' to save.`, "success");
         } else {
             alert(result.detail || "Failed to upload resume file.");

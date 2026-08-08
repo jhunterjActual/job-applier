@@ -52,7 +52,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [x] Add an AI-provider abstraction with securely stored bring-your-own keys, model selection, capability validation, and clear provider-specific errors; support providers beyond Gemini without exposing secrets to the browser.
 - [x] Add a geocoding/maps-provider abstraction with provider selection, securely stored credentials, validation, rate-limit handling, and support for alternatives to Google Maps.
 - [x] Polish the cleanup-preview modal action bar: prevent Restore counts and labels from wrapping awkwardly, use consistent button sizing and icon alignment, establish a clearer primary/secondary/destructive hierarchy, and stack actions cleanly at narrow widths.
-- [ ] Support multiple base resumes and version history.
+- [x] Support multiple named base resumes with safe selection, duplication and deletion; automatic snapshots for meaningful saves; previewable, non-destructive version restore; migration of existing resume content; and source-resume/version attribution on newly tailored materials.
 - [ ] Import DOCX/PDF resumes with OCR fallback and export an accessible DOCX alternative.
 - [ ] Add compensation, contract-rate, shift, travel, commute, sponsorship, clearance, license, and work-condition filters.
 - [ ] Add role-specific skills, projects, portfolios, licenses, certifications, and work-sample sections.
