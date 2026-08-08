@@ -13,6 +13,7 @@ let geminiKeyConfigured = false;
 let googleMapsKeyConfigured = false;
 let loadedJobs = [];
 let jobImportCanonicalUrl = null;
+let sourceDiagnosticsOpener = null;
 
 // DOM Elements
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -60,6 +61,8 @@ const jobStatusFilter = document.getElementById("job-status-filter");
 const jobSortOrder = document.getElementById("job-sort-order");
 const providerAlerts = document.getElementById("provider-alerts");
 const savedSearchAlerts = document.getElementById("saved-search-alerts");
+const openSourceDiagnosticsBtn = document.getElementById("open-source-diagnostics-btn");
+const sourceDiagnosticsCount = document.getElementById("source-diagnostics-count");
 const openJobImportBtn = document.getElementById("open-job-import-btn");
 const jobImportModal = document.getElementById("job-import-modal");
 const jobImportForm = document.getElementById("job-import-form");
@@ -111,6 +114,15 @@ const suppressionCount = document.getElementById("suppression-count");
 const suppressionList = document.getElementById("suppression-list");
 const suppressionEmpty = document.getElementById("suppression-empty");
 const clearAllSuppressionsBtn = document.getElementById("clear-all-suppressions-btn");
+const sourceDiagnosticsModal = document.getElementById("source-diagnostics-modal");
+const sourceDiagnosticsList = document.getElementById("source-diagnostics-list");
+const sourceDiagnosticsEmpty = document.getElementById("source-diagnostics-empty");
+const clearSourceDiagnosticsBtn = document.getElementById("clear-source-diagnostics-btn");
+const exportSourceDiagnosticsBtn = document.getElementById("export-source-diagnostics-btn");
+const closeSourceDiagnosticsBtns = [
+    document.getElementById("close-source-diagnostics-modal"),
+    document.getElementById("close-source-diagnostics-modal-btn")
+].filter(Boolean);
 const lifecycleModal = document.getElementById("lifecycle-modal");
 const lifecycleForm = document.getElementById("lifecycle-form");
 const lifecycleStatus = document.getElementById("lifecycle-status");
@@ -150,6 +162,9 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(deleteUntouchedBtn, "click", () => runCleanupAction("delete"));
     bindEvent(restoreArchivedBtn, "click", () => runCleanupAction("restore"));
     bindEvent(clearAllSuppressionsBtn, "click", clearAllJobSuppressions);
+    bindEvent(openSourceDiagnosticsBtn, "click", showSourceDiagnostics);
+    closeSourceDiagnosticsBtns.forEach(btn => btn.addEventListener("click", hideSourceDiagnostics));
+    bindEvent(clearSourceDiagnosticsBtn, "click", clearSourceDiagnostics);
     bindEvent(lifecycleForm, "submit", saveLifecycleChange);
     bindEvent(document.getElementById("close-lifecycle-modal"), "click", hideLifecycleModal);
     bindEvent(document.getElementById("cancel-lifecycle-btn"), "click", hideLifecycleModal);
@@ -169,6 +184,12 @@ document.addEventListener("DOMContentLoaded", () => {
     checkDueSavedSearches();
     loadJobs();
     loadLogs();
+    refreshSourceDiagnosticCount();
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && sourceDiagnosticsModal.classList.contains("active")) {
+            hideSourceDiagnostics();
+        }
+    });
 });
 
 function bindEvent(element, eventName, handler) {
@@ -1160,6 +1181,7 @@ async function searchJobs(e) {
                         hideLoading();
                         logActivity("Job Search Complete", "Found and analyzed new job openings.", "success");
                         renderProviderAlerts(status.last_result);
+                        await refreshSourceDiagnosticCount();
                     }
                 } catch (err) {
                     console.error("Error polling search status:", err);
@@ -1187,10 +1209,135 @@ function renderProviderAlerts(searchResult) {
     providerAlerts.hidden = false;
     const informationalCodes = new Set(["stale_postings", "partial_results"]);
     const needsAttention = alerts.some(alert => !informationalCodes.has(alert.code));
-    providerAlerts.appendChild(createElement("strong", "", needsAttention ? "Some job sources may need attention" : "Search notes"));
+    const header = createElement("div", "provider-alerts-header");
+    header.appendChild(createElement("strong", "", needsAttention ? "Some job sources may need attention" : "Search notes"));
+    const actions = createElement("div", "provider-alert-actions");
+    const reviewButton = createActionButton("Review history", "fa-solid fa-clock-rotate-left", "btn btn-secondary btn-sm", showSourceDiagnostics);
+    const dismissButton = createActionButton("", "fa-solid fa-xmark", "provider-alert-dismiss", dismissProviderAlerts, "Dismiss this source notice");
+    dismissButton.setAttribute("aria-label", "Dismiss this source notice");
+    actions.append(reviewButton, dismissButton);
+    header.appendChild(actions);
+    providerAlerts.appendChild(header);
     const list = createElement("ul", "margin-top-sm");
     alerts.forEach(alert => list.appendChild(createElement("li", "", alert.message)));
     providerAlerts.appendChild(list);
+}
+
+function dismissProviderAlerts() {
+    providerAlerts.hidden = true;
+    openSourceDiagnosticsBtn.focus();
+}
+
+const DIAGNOSTIC_CODE_LABELS = {
+    url_format_drift: "Job URL format changed",
+    content_format_drift: "Posting data format changed",
+    access_challenge: "Automated reading blocked",
+    provider_error: "Provider request error",
+    stale_postings: "Stale postings skipped",
+    partial_results: "Partial search results"
+};
+
+const DIAGNOSTIC_COUNTER_LABELS = {
+    raw_candidates: "Raw candidates",
+    valid_discovered: "Valid posting URLs",
+    new_candidates: "New candidates",
+    accepted: "Accepted postings",
+    rejected: "Rejected postings",
+    skipped_active: "Already active",
+    skipped_archived: "Already archived",
+    skipped_suppressed: "Previously deleted",
+    api_fallbacks: "API fallbacks",
+    stale: "Stale postings",
+    format_drift: "Format mismatches",
+    access_challenge: "Access challenges",
+    embedded_content: "Protected frames",
+    provider_error: "Provider errors",
+    oversized_responses: "Oversized responses",
+    candidate_limit_hits: "Candidate limits reached",
+    timeouts: "Timeouts",
+    search_errors: "Search errors",
+    candidate_budget_exhausted: "Run limit reached"
+};
+
+async function refreshSourceDiagnosticCount() {
+    try {
+        const response = await fetch(`${API_URL}/api/source-diagnostics?limit=1`);
+        if (!response.ok) return;
+        const result = await response.json();
+        sourceDiagnosticsCount.textContent = String(result.count || 0);
+        sourceDiagnosticsCount.hidden = result.count === 0;
+    } catch {
+        // Diagnostic history must never interfere with the primary workflow.
+    }
+}
+
+async function showSourceDiagnostics(event) {
+    sourceDiagnosticsOpener = event?.currentTarget || openSourceDiagnosticsBtn;
+    sourceDiagnosticsEmpty.hidden = false;
+    sourceDiagnosticsEmpty.textContent = "Loading source diagnostic history...";
+    sourceDiagnosticsList.replaceChildren();
+    sourceDiagnosticsModal.classList.add("active");
+    document.getElementById("close-source-diagnostics-modal").focus();
+    try {
+        await loadSourceDiagnostics();
+    } catch (error) {
+        sourceDiagnosticsEmpty.hidden = false;
+        sourceDiagnosticsEmpty.textContent = error.message || "Source diagnostic history could not be loaded.";
+    }
+}
+
+function hideSourceDiagnostics() {
+    sourceDiagnosticsModal.classList.remove("active");
+    if (sourceDiagnosticsOpener?.isConnected) sourceDiagnosticsOpener.focus();
+}
+
+async function loadSourceDiagnostics() {
+    const response = await fetch(`${API_URL}/api/source-diagnostics?limit=100`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Source diagnostic history could not be loaded.");
+
+    sourceDiagnosticsList.replaceChildren();
+    sourceDiagnosticsEmpty.hidden = result.items.length > 0;
+    sourceDiagnosticsEmpty.textContent = "No source diagnostics have been recorded.";
+    clearSourceDiagnosticsBtn.disabled = result.count === 0;
+    exportSourceDiagnosticsBtn.hidden = result.count === 0;
+    sourceDiagnosticsCount.textContent = String(result.count || 0);
+    sourceDiagnosticsCount.hidden = result.count === 0;
+
+    result.items.forEach(item => {
+        const row = createElement("li", "source-diagnostic-item");
+        const header = createElement("div", "source-diagnostic-item-header");
+        const identity = createElement("div");
+        identity.appendChild(createElement("strong", "", `${String(item.provider).toUpperCase()} — ${DIAGNOSTIC_CODE_LABELS[item.code] || "Source notice"}`));
+        const timestamp = createElement("time", "", new Date(item.recorded_at).toLocaleString());
+        timestamp.dateTime = item.recorded_at;
+        identity.appendChild(timestamp);
+        header.append(identity, createElement("span", `diagnostic-level ${item.level}`, item.level === "attention" ? "Needs attention" : "Note"));
+        row.appendChild(header);
+
+        const details = createElement("details", "diagnostic-counters");
+        details.appendChild(createElement("summary", "", "Aggregate counters"));
+        const counters = createElement("dl");
+        Object.entries(DIAGNOSTIC_COUNTER_LABELS).forEach(([key, label]) => {
+            const value = Number(item.counters?.[key] || 0);
+            if (value === 0 && !["raw_candidates", "valid_discovered", "new_candidates", "accepted", "rejected"].includes(key)) return;
+            counters.append(createElement("dt", "", label), createElement("dd", "", String(value)));
+        });
+        details.appendChild(counters);
+        row.appendChild(details);
+        sourceDiagnosticsList.appendChild(row);
+    });
+}
+
+async function clearSourceDiagnostics() {
+    if (!confirm("Clear all local source diagnostic history? This does not affect saved jobs or searches.")) return;
+    const response = await fetch(`${API_URL}/api/source-diagnostics`, { method: "DELETE" });
+    const result = await response.json();
+    if (!response.ok) {
+        alert(result.detail || "Source diagnostic history could not be cleared.");
+        return;
+    }
+    await loadSourceDiagnostics();
 }
 
 // Trigger AI Resume Tailoring

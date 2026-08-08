@@ -2,13 +2,16 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import json
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
 import app as app_module
+import database as database_module
 import materials as materials_module
 import searcher as searcher_module
+import source_diagnostics as source_diagnostics_module
 from fastapi.testclient import TestClient
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from materials import material_download_name, persist_cover_letter, resolve_output_file
@@ -26,6 +29,11 @@ from searcher import (
     is_useful_job_details,
     provider_alerts_from_health,
     provider_for_url,
+)
+from source_diagnostics import (
+    MAX_COUNTER_VALUE,
+    list_source_diagnostics,
+    persist_source_diagnostics,
 )
 from tailor import (
     RESUME_MODE_GUIDANCE,
@@ -187,12 +195,16 @@ class FrontendStartupTests(unittest.TestCase):
             "job-import-company", "job-import-title", "job-import-description",
             "save-job-import-btn", "suppression-count", "suppression-list",
             "suppression-empty", "clear-all-suppressions-btn",
+            "open-source-diagnostics-btn", "source-diagnostics-count",
+            "source-diagnostics-modal", "source-diagnostics-list",
+            "source-diagnostics-empty", "clear-source-diagnostics-btn",
+            "export-source-diagnostics-btn",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260808-2", html_source)
-        self.assertIn("index.css?v=20260808-2", html_source)
+        self.assertIn("app.js?v=20260808-3", html_source)
+        self.assertIn("index.css?v=20260808-3", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -200,7 +212,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.2", source)
+                self.assertIn("20260808.3", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -298,6 +310,22 @@ class FrontendStartupTests(unittest.TestCase):
         script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('["stale_postings", "partial_results"]', script_source)
         self.assertIn('needsAttention ? "Some job sources may need attention" : "Search notes"', script_source)
+
+    def test_source_notices_are_dismissible_with_persistent_history_access(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+        script_source = (static_dir / "app.js").read_text(encoding="utf-8")
+        css_source = (static_dir / "index.css").read_text(encoding="utf-8")
+        self.assertIn('id="provider-alerts" role="status" aria-live="polite"', html_source)
+        self.assertIn('role="dialog" aria-modal="true" aria-labelledby="source-diagnostics-title"', html_source)
+        self.assertIn("dismissProviderAlerts", script_source)
+        self.assertIn("openSourceDiagnosticsBtn.focus()", script_source)
+        self.assertIn("showSourceDiagnostics", script_source)
+        self.assertIn("loadSourceDiagnostics", script_source)
+        self.assertIn("createElement(\"details\"", script_source)
+        self.assertNotIn("sourceDiagnosticsList.innerHTML", script_source)
+        self.assertIn(".provider-alert-dismiss:focus-visible", css_source)
+        self.assertIn("@media (max-width: 620px)", css_source)
 
     def test_startup_activity_reflects_loaded_profile_state(self) -> None:
         static_dir = Path(__file__).parent / "static"
@@ -1287,6 +1315,203 @@ class ResumeTemplateTests(unittest.TestCase):
             apply_resume_section_template("# Candidate\n\n## Mystery Material\nText", "it")
 
 
+class SourceDiagnosticHistoryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.database_path = Path(self.temp_dir.name) / "source-diagnostics.db"
+        connection = sqlite3.connect(self.database_path)
+        connection.executescript("""
+            CREATE TABLE source_diagnostics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recorded_at TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                diagnostic_code TEXT NOT NULL,
+                counters_json TEXT NOT NULL
+            );
+        """)
+        connection.close()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def connection_factory(self):
+        connection = sqlite3.connect(self.database_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    @staticmethod
+    def search_result(code="content_format_drift", recorded_value=4) -> dict:
+        return {
+            "provider_alerts": [{
+                "provider": "lever", "code": code,
+                "message": "Do not retain https://private.example/jobs/secret",
+                "unexpected": "resume and credential data",
+            }],
+            "provider_health": {
+                "lever": {
+                    "raw_candidates": recorded_value,
+                    "valid_discovered": -3,
+                    "new_candidates": "2",
+                    "accepted": 0,
+                    "rejected": 2,
+                    "errors": ["API key secret-value", "https://private.example"],
+                    "search": "private keywords in Dayton",
+                    "resume": "private resume text",
+                    "rejection_reasons": {
+                        "format_drift": 2,
+                        "provider_error": MAX_COUNTER_VALUE + 100,
+                        "raw_exception": "secret exception",
+                    },
+                    "partial_results": {"timeouts": 1, "private": "secret"},
+                }
+            },
+        }
+
+    def test_persistence_allowlists_and_bounds_diagnostic_data(self) -> None:
+        connection = self.connection_factory()
+        inserted = persist_source_diagnostics(
+            connection, self.search_result(), "2026-08-08T12:00:00"
+        )
+        connection.commit()
+        stored_json = connection.execute("SELECT counters_json FROM source_diagnostics").fetchone()[0]
+        history = list_source_diagnostics(connection)
+        connection.close()
+
+        self.assertEqual(1, inserted)
+        self.assertEqual(0, history["items"][0]["counters"]["valid_discovered"])
+        self.assertEqual(MAX_COUNTER_VALUE, history["items"][0]["counters"]["provider_error"])
+        self.assertEqual(1, history["items"][0]["counters"]["timeouts"])
+        self.assertEqual(2, history["items"][0]["counters"]["search_errors"])
+        for private_value in ("private.example", "secret-value", "private keywords", "resume text", "secret exception"):
+            self.assertNotIn(private_value, stored_json)
+
+    def test_unknown_provider_and_code_are_not_persisted(self) -> None:
+        result = self.search_result()
+        result["provider_alerts"].extend([
+            {"provider": "unknown", "code": "provider_error"},
+            {"provider": "lever", "code": "raw_exception"},
+        ])
+        connection = self.connection_factory()
+        inserted = persist_source_diagnostics(connection, result, "2026-08-08T12:00:00")
+        connection.commit()
+        count = connection.execute("SELECT COUNT(*) FROM source_diagnostics").fetchone()[0]
+        connection.close()
+        self.assertEqual(1, inserted)
+        self.assertEqual(1, count)
+
+    def test_informational_search_note_remains_retrievable_after_dismissal(self) -> None:
+        connection = self.connection_factory()
+        persist_source_diagnostics(
+            connection, self.search_result(code="partial_results"), "2026-08-08T12:00:00"
+        )
+        connection.commit()
+        history = list_source_diagnostics(connection)
+        connection.close()
+        self.assertEqual("note", history["items"][0]["level"])
+        self.assertEqual("partial_results", history["items"][0]["code"])
+
+    def test_history_is_newest_first_and_retention_is_bounded(self) -> None:
+        connection = self.connection_factory()
+        with patch.object(source_diagnostics_module, "MAX_HISTORY_RECORDS", 3):
+            for index in range(5):
+                persist_source_diagnostics(
+                    connection,
+                    self.search_result(recorded_value=index),
+                    f"2026-08-08T12:00:0{index}",
+                )
+            connection.commit()
+        history = list_source_diagnostics(connection, limit=50)
+        connection.close()
+        self.assertEqual(3, history["count"])
+        self.assertEqual(
+            ["2026-08-08T12:00:04", "2026-08-08T12:00:03", "2026-08-08T12:00:02"],
+            [item["recorded_at"] for item in history["items"]],
+        )
+
+    def test_api_retrieves_exports_and_clears_safe_history(self) -> None:
+        connection = self.connection_factory()
+        persist_source_diagnostics(connection, self.search_result(), "2026-08-08T12:00:00")
+        connection.execute(
+            "UPDATE source_diagnostics SET counters_json = ?",
+            ('{"raw_candidates":4,"leak":"secret-value"}',),
+        )
+        connection.commit()
+        connection.close()
+        with patch.object(app_module, "get_db_connection", side_effect=self.connection_factory):
+            history_response = app_module.get_source_diagnostic_history()
+            export_response = app_module.export_source_diagnostic_history()
+            cleared = app_module.clear_source_diagnostic_history()
+
+        history = json.loads(history_response.body)
+        exported = json.loads(export_response.body)
+        self.assertEqual(1, history["count"])
+        self.assertEqual("no-store", history_response.headers["cache-control"])
+        self.assertEqual(1, exported["record_count"])
+        self.assertIn("attachment;", export_response.headers["content-disposition"])
+        exported_text = export_response.body.decode("utf-8")
+        self.assertNotIn("private.example", exported_text)
+        self.assertNotIn("secret-value", exported_text)
+        self.assertEqual(1, cleared["cleared"])
+
+    def test_history_failure_does_not_replace_successful_search_result(self) -> None:
+        result = self.search_result()
+        result["success"] = True
+        connection = unittest.mock.Mock()
+        with (
+            patch.object(app_module, "run_job_search_and_matching", return_value=result),
+            patch.object(app_module, "get_db_connection", return_value=connection),
+            patch.object(app_module, "persist_source_diagnostics", side_effect=sqlite3.OperationalError("disk full")),
+        ):
+            app_module.IS_SEARCHING = True
+            app_module.run_search_wrapper("private keywords", "private location")
+
+        self.assertIs(result, app_module.LAST_SEARCH_RESULT)
+        self.assertFalse(app_module.IS_SEARCHING)
+        connection.rollback.assert_called_once()
+        connection.close.assert_called_once()
+
+    def test_history_connection_failure_does_not_replace_successful_search_result(self) -> None:
+        result = self.search_result()
+        result["success"] = True
+        with (
+            patch.object(app_module, "run_job_search_and_matching", return_value=result),
+            patch.object(app_module, "get_db_connection", side_effect=sqlite3.OperationalError("unavailable")),
+        ):
+            app_module.IS_SEARCHING = True
+            app_module.run_search_wrapper("private keywords", "private location")
+        self.assertIs(result, app_module.LAST_SEARCH_RESULT)
+        self.assertFalse(app_module.IS_SEARCHING)
+
+    def test_search_without_notices_does_not_open_history_database(self) -> None:
+        connection_factory = unittest.mock.Mock()
+        result = {"success": True, "provider_alerts": [], "provider_health": {}}
+        with (
+            patch.object(app_module, "run_job_search_and_matching", return_value=result),
+            patch.object(app_module, "get_db_connection", connection_factory),
+        ):
+            app_module.IS_SEARCHING = True
+            app_module.run_search_wrapper("keywords", "location")
+        connection_factory.assert_not_called()
+        self.assertIs(result, app_module.LAST_SEARCH_RESULT)
+
+    def test_schema_migration_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "migration.db"
+            with patch.object(database_module, "DB_PATH", database_path):
+                database_module.init_db()
+                database_module.init_db()
+            connection = sqlite3.connect(database_path)
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )}
+            indexes = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )}
+            connection.close()
+        self.assertIn("source_diagnostics", tables)
+        self.assertIn("idx_source_diagnostics_recorded_at", indexes)
+
+
 class LifecycleSchemaTests(unittest.TestCase):
     def test_lifecycle_columns_and_foreign_keys_are_enabled(self) -> None:
         connection = get_db_connection()
@@ -1304,7 +1529,7 @@ class LifecycleSchemaTests(unittest.TestCase):
         self.assertIn("prefer_us_headquarters", profile_columns)
         self.assertEqual(1, connection.execute("PRAGMA foreign_keys").fetchone()[0])
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertTrue({"application_status_history", "saved_searches", "job_suppressions"}.issubset(tables))
+        self.assertTrue({"application_status_history", "saved_searches", "job_suppressions", "source_diagnostics"}.issubset(tables))
         saved_search_columns = {row[1] for row in connection.execute("PRAGMA table_info(saved_searches)")}
         self.assertTrue({"schedule_frequency", "next_alert_at"}.issubset(saved_search_columns))
         connection.close()

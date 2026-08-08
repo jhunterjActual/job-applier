@@ -24,6 +24,7 @@ from utils import generate_resume_pdf, find_us_headquarters
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import is_job_suppressed, record_job_suppression
+from source_diagnostics import list_source_diagnostics, persist_source_diagnostics
 from materials import material_download_name, persist_cover_letter, resolve_output_file
 from analytics import (
     capture_event,
@@ -33,7 +34,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.2"
+APP_BUILD = "20260808.3"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -294,6 +295,33 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
 IS_SEARCHING = False
 LAST_SEARCH_RESULT = None
 
+
+def _save_source_diagnostic_history(search_result: dict) -> None:
+    """Best-effort local history must never change the outcome of a search."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        persist_source_diagnostics(
+            conn,
+            search_result,
+            datetime.now().isoformat(timespec="seconds"),
+        )
+        conn.commit()
+    except Exception:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        print("Source diagnostic history could not be saved; search results remain available.")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def run_search_wrapper(keywords: str, location: str) -> None:
     """
     A background helper task that triggers the crawling and matching of jobs,
@@ -306,6 +334,8 @@ def run_search_wrapper(keywords: str, location: str) -> None:
     global IS_SEARCHING, LAST_SEARCH_RESULT
     try:
         LAST_SEARCH_RESULT = run_job_search_and_matching(keywords, location)
+        if isinstance(LAST_SEARCH_RESULT, dict) and LAST_SEARCH_RESULT.get("provider_alerts"):
+            _save_source_diagnostic_history(LAST_SEARCH_RESULT)
     except Exception as exc:
         LAST_SEARCH_RESULT = {"success": False, "error": str(exc), "provider_alerts": []}
     finally:
@@ -722,6 +752,53 @@ def get_search_status() -> dict:
     """
     global IS_SEARCHING, LAST_SEARCH_RESULT
     return {"searching": IS_SEARCHING, "last_result": LAST_SEARCH_RESULT}
+
+
+@app.get("/api/source-diagnostics")
+def get_source_diagnostic_history(limit: int = 100) -> JSONResponse:
+    """Retrieve recent privacy-minimized source notices for troubleshooting."""
+    conn = get_db_connection()
+    try:
+        history = list_source_diagnostics(conn, limit)
+        return JSONResponse(history, headers={"Cache-Control": "no-store"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/source-diagnostics/export")
+def export_source_diagnostic_history() -> JSONResponse:
+    """Download the bounded local history without searches, URLs, or job data."""
+    conn = get_db_connection()
+    try:
+        history = list_source_diagnostics(conn, 500)
+    finally:
+        conn.close()
+    payload = {
+        "schema_version": 1,
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "record_count": history["count"],
+        "diagnostics": history["items"],
+    }
+    filename = f"job-applier-source-diagnostics-{date.today().isoformat()}.json"
+    return JSONResponse(
+        payload,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
+@app.delete("/api/source-diagnostics")
+def clear_source_diagnostic_history() -> dict:
+    """Clear local troubleshooting history without affecting jobs or searches."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("DELETE FROM source_diagnostics")
+        conn.commit()
+        return {"success": True, "cleared": cursor.rowcount}
+    finally:
+        conn.close()
 
 
 @app.get("/api/saved-searches")
