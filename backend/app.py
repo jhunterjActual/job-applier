@@ -32,6 +32,7 @@ from maps_providers import (
     resolve_headquarters,
     validate_maps_provider,
 )
+from application_insights import build_application_insights
 from database import get_db_connection
 from tailor import analyze_job_match, apply_resume_section_template, finalize_cover_letter, tailor_resume_and_cover_letter
 from searcher import (
@@ -82,7 +83,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.12"
+APP_BUILD = "20260808.13"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -1913,6 +1914,16 @@ def get_applications() -> list[dict]:
     """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+@app.get("/api/application-insights")
+def get_application_insights() -> dict:
+    """Return local-only application funnel and response-rate aggregates."""
+    conn = get_db_connection()
+    try:
+        return build_application_insights(conn)
+    finally:
+        conn.close()
 
 # Mount frontend static folder
 static_dir = os.path.join(os.path.dirname(__file__), "static")

@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-12">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-13">
 </head>
 <body>
     <div class="app-container">
@@ -98,6 +98,74 @@
                         </div>
                         <div class="stat-progress-bar green" style="width: 100%;"></div>
                     </div>
+                </div>
+
+                <div class="card application-insights-card" id="application-insights-card">
+                    <div class="card-header justify-between">
+                        <div>
+                            <h2>Application Effectiveness</h2>
+                            <p class="insights-description">Response rates use only applications you confirmed as applied. A response is a recorded interview, offer, or rejection.</p>
+                        </div>
+                        <div class="insights-dimension-control">
+                            <label for="application-insights-dimension">Break down by</label>
+                            <select id="application-insights-dimension">
+                                <option value="source">Job source</option>
+                                <option value="role">Role</option>
+                                <option value="location">Location</option>
+                                <option value="resume">Resume version</option>
+                                <option value="method">Application method</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="insights-summary-grid" id="application-insights-summary" aria-live="polite">
+                        <div class="insight-summary-item">
+                            <span class="insight-value" id="insight-applications">0</span>
+                            <span class="insight-label">Confirmed applications</span>
+                        </div>
+                        <div class="insight-summary-item">
+                            <span class="insight-value" id="insight-responses">0</span>
+                            <span class="insight-label">Employer responses</span>
+                        </div>
+                        <div class="insight-summary-item">
+                            <span class="insight-value" id="insight-interviews">0</span>
+                            <span class="insight-label">Interviews</span>
+                        </div>
+                        <div class="insight-summary-item">
+                            <span class="insight-value" id="insight-offers">0</span>
+                            <span class="insight-label">Offers</span>
+                        </div>
+                        <div class="insight-summary-item">
+                            <span class="insight-value" id="insight-rejections">0</span>
+                            <span class="insight-label">Rejections</span>
+                        </div>
+                        <div class="insight-summary-item accent">
+                            <span class="insight-value" id="insight-response-rate">0%</span>
+                            <span class="insight-label">Response rate</span>
+                        </div>
+                    </div>
+                    <div class="table-responsive insights-table-wrap">
+                        <table class="data-table" id="application-insights-table">
+                            <thead>
+                                <tr>
+                                    <th id="application-insights-group-heading">Job source</th>
+                                    <th>Applications</th>
+                                    <th>Responses</th>
+                                    <th>Interviews</th>
+                                    <th>Offers</th>
+                                    <th>Rejections</th>
+                                    <th>Response rate</th>
+                                </tr>
+                            </thead>
+                            <tbody id="application-insights-body">
+                                <tr>
+                                    <td colspan="7" class="table-empty-state compact">
+                                        <p>Confirm an application to begin measuring outcomes.</p>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="insights-footnote" id="application-insights-note">Treat percentages from small samples as directional, not predictive.</p>
                 </div>
 
                 <div class="dashboard-content-grid">
@@ -944,6 +1012,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-12"></script>
+    <script src="/static/app.js?v=20260808-13"></script>
 </body>
 </html>

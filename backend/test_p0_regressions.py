@@ -19,6 +19,7 @@ import materials as materials_module
 import operations as operations_module
 import searcher as searcher_module
 import source_diagnostics as source_diagnostics_module
+from application_insights import build_application_insights
 import pymupdf
 from docx import Document as WordDocument
 from fastapi.testclient import TestClient
@@ -837,12 +838,15 @@ class FrontendStartupTests(unittest.TestCase):
             "job-sponsorship-filter", "job-clearance-filter",
             "job-license-filter", "job-conditions-filter",
             "job-include-unknown", "reset-advanced-job-filters",
+            "application-insights-card", "application-insights-dimension",
+            "application-insights-summary", "application-insights-table",
+            "application-insights-body", "application-insights-note",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-12", html_source)
-        self.assertIn("index.css?v=20260808-12", html_source)
+        self.assertIn("app.js?v=20260808-13", html_source)
+        self.assertIn("index.css?v=20260808-13", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -850,7 +854,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.12", source)
+                self.assertIn("20260808.13", source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -2725,6 +2729,120 @@ class LifecycleSchemaTests(unittest.TestCase):
         saved_search_columns = {row[1] for row in connection.execute("PRAGMA table_info(saved_searches)")}
         self.assertTrue({"schedule_frequency", "next_alert_at"}.issubset(saved_search_columns))
         connection.close()
+
+
+class ApplicationInsightsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        self.connection.row_factory = sqlite3.Row
+        self.connection.executescript("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY,
+                title TEXT,
+                source TEXT,
+                location TEXT
+            );
+            CREATE TABLE applications (
+                id INTEGER PRIMARY KEY,
+                job_id INTEGER,
+                position TEXT,
+                date_applied TEXT,
+                confirmed_at TEXT,
+                created_at TEXT,
+                application_method TEXT,
+                base_resume_name TEXT,
+                base_resume_version INTEGER,
+                status TEXT
+            );
+            CREATE TABLE application_status_history (
+                id INTEGER PRIMARY KEY,
+                job_id INTEGER,
+                to_status TEXT,
+                changed_at TEXT,
+                undone_at TEXT
+            );
+        """)
+        self.connection.executemany(
+            "INSERT INTO jobs (id, title, source, location) VALUES (?, ?, ?, ?)",
+            (
+                (1, "Data Architect", "lever", "Remote"),
+                (2, "Chief Data Officer", "greenhouse", "Dayton, OH"),
+                (3, "VP Data", "greenhouse", "Dayton, OH"),
+                (4, "Security Architect", "lever", "Remote"),
+                (5, "Tailored Only", "ashby", "Chicago, IL"),
+            ),
+        )
+        self.connection.executemany("""
+            INSERT INTO applications (
+                id, job_id, position, date_applied, confirmed_at, created_at,
+                application_method, base_resume_name, base_resume_version, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            (1, 1, "Data Architect", "2026-08-01", "2026-08-01T09:00:00", "2026-08-01", "manual:company_site", "Architecture", 3, "applied"),
+            (2, 2, "Chief Data Officer", "2026-08-01", "2026-08-01T09:00:00", "2026-08-01", "manual:referral", "Executive", 2, "rejected"),
+            (3, 3, "VP Data", "2026-08-02", "2026-08-02T09:00:00", "2026-08-02", "manual:referral", "Executive", 2, "offer"),
+            (4, 4, "Security Architect", "2026-08-02", "2026-08-02T09:00:00", "2026-08-02", "job_board", None, None, "applied"),
+            (5, 5, "Tailored Only", None, None, "2026-08-02", None, "General", 1, "tailored"),
+        ))
+        self.connection.executemany("""
+            INSERT INTO application_status_history (id, job_id, to_status, changed_at, undone_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            (1, 2, "interview", "2026-08-03T10:00:00", None),
+            (2, 2, "rejected", "2026-08-05T10:00:00", None),
+            (3, 3, "offer", "2026-08-05T10:00:00", None),
+            (4, 4, "interview", "2026-08-04T10:00:00", "2026-08-04T11:00:00"),
+        ))
+
+    def tearDown(self) -> None:
+        self.connection.close()
+
+    def test_summarizes_confirmed_outcomes_and_active_history(self) -> None:
+        result = build_application_insights(self.connection)
+
+        self.assertEqual({
+            "applications": 4,
+            "responses": 2,
+            "positive_responses": 2,
+            "interviews": 1,
+            "offers": 1,
+            "rejections": 1,
+            "pending": 2,
+            "response_rate": 50.0,
+            "positive_response_rate": 50.0,
+            "average_response_days": 2.5,
+        }, result["summary"])
+        self.assertEqual(
+            "An interview, offer, or rejection recorded in the current lifecycle or its active history.",
+            result["definitions"]["response"],
+        )
+
+    def test_groups_by_each_requested_dimension(self) -> None:
+        result = build_application_insights(self.connection)
+
+        by_source = {item["label"]: item for item in result["groups"]["source"]}
+        self.assertEqual(2, by_source["Greenhouse"]["applications"])
+        self.assertEqual(100.0, by_source["Greenhouse"]["response_rate"])
+        self.assertEqual(0.0, by_source["Lever"]["response_rate"])
+        by_location = {item["label"]: item for item in result["groups"]["location"]}
+        self.assertEqual(2, by_location["Dayton, OH"]["responses"])
+        by_resume = {item["label"]: item for item in result["groups"]["resume"]}
+        self.assertEqual(2, by_resume["Executive · v2"]["applications"])
+        self.assertIn("Unattributed resume", by_resume)
+        by_method = {item["label"]: item for item in result["groups"]["method"]}
+        self.assertEqual(2, by_method["Referral"]["applications"])
+        by_role = {item["label"]: item for item in result["groups"]["role"]}
+        self.assertIn("Chief Data Officer", by_role)
+        self.assertNotIn("Tailored Only", by_role)
+
+    def test_normalizes_common_source_hostnames_for_display(self) -> None:
+        self.connection.execute("UPDATE jobs SET source = 'www.linkedin.com' WHERE id = 1")
+
+        result = build_application_insights(self.connection)
+
+        labels = {item["label"] for item in result["groups"]["source"]}
+        self.assertIn("LinkedIn", labels)
+        self.assertNotIn("Www.Linkedin.Com", labels)
 
 
 class ManualLifecycleTests(unittest.TestCase):
