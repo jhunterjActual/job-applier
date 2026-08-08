@@ -119,7 +119,8 @@ If you prefer setting up manually or are on macOS/Linux:
    - Save the settings, then use **Test Saved AI Provider** to validate the stored key, selected model, and structured-output capability before starting a long search.
    - Use **Test Saved Maps Provider** for a small, user-triggered capability check. The public Nominatim option identifies the app, sends at most one request per second, caches successful results, and must not be used for bulk or autocomplete traffic. Set `NOMINATIM_BASE_URL` to an approved self-hosted/third-party endpoint when public-service limits do not fit your use.
    - Keep **Prefer a U.S. headquarters address** selected when U.S. unemployment reporting requires a domestic employer address; clear it to prefer the employer's primary global headquarters.
-   - Select an existing named base resume or use **New**/**Duplicate** to maintain role-specific starting points. Upload a `.txt` or `.md` file, or copy-paste content directly.
+   - Select an existing named base resume or use **New**/**Duplicate** to maintain role-specific starting points. Import a `.txt`, `.md`, `.docx`, or `.pdf` file, or copy-paste content directly. Text, Markdown, DOCX, and text-based PDF extraction stay local.
+   - Scanned or image-only PDF pages are never sent to an AI provider by default. To use OCR, select **Allow my selected AI provider to OCR scanned PDF pages** before importing; only pages without readable embedded text are sent as images to the selected provider. Review the transcription before saving it.
    - Click **Save Settings**. Meaningful name, mode, or content changes create a new version; unchanged saves do not duplicate history.
    - Use **History** to preview earlier versions and restore one non-destructively. A restore becomes a new version, and the app prevents deletion of your last base resume.
 2. **Search for Jobs**:
@@ -129,9 +130,9 @@ If you prefer setting up manually or are on macOS/Linux:
    - Click **Search & Analyze**.
 3. **Tailor Materials**:
    - Under **Discovered Job Postings**, click **Tailor Materials** next to a matched job.
-   - Review your tailored resume and cover letter.
+   - Review your tailored resume and cover letter. Download either the two-page PDF or an editable, accessible DOCX with semantic headings, real lists, and clickable contact links.
 4. **Apply**:
-   - Click **Apply Manually**, review and save edits, and download the **Resume PDF** and **Cover Letter TXT**.
+   - Click **Apply Manually**, review and save edits, and download the **Resume PDF** or **Accessible DOCX** plus the **Cover Letter TXT**.
    - Click **Open Application Site**, complete the employer's form yourself, and return to use **Mark Applied** with the correct date and method.
 
 ### Preview and clean up untouched jobs
@@ -159,7 +160,7 @@ Permanent deletion also creates a privacy-minimized local suppression record so 
 - Select the named base resume and its resume mode under **Profile & Resume** before tailoring. The selected resume and version are recorded with newly generated materials for future outcome analysis. Generated resume and cover-letter text can be edited in **View Materials**; **Save Edits** regenerates both downloadable artifacts.
 - Each resume mode uses a deterministic section template before PDF generation. Manual application dates accept direct `MM/DD/YYYY` or `YYYY-MM-DD` entry and also provide a calendar picker.
 
-The app is designed for local access at `127.0.0.1`. It rejects non-loopback Host headers and cross-site state-changing browser requests, while still allowing local command-line clients that do not send browser-origin headers. Resume text uploads are streamed and limited to 2 MB. Job-page browser navigation validates the initial URL, redirects, and subresources against resolved public HTTP(S) addresses so manual imports cannot reach loopback, private, link-local, or reserved network services. Cross-origin browser access is intentionally disabled, and profile reads return only API-key configuration flags—not stored key values. Do not bind the current single-user application to a public or shared network interface; public hosting requires authentication, per-user authorization, isolated files/data, and protected secret storage first.
+The app is designed for local access at `127.0.0.1`. It rejects non-loopback Host headers and cross-site state-changing browser requests, while still allowing local command-line clients that do not send browser-origin headers. Resume uploads are streamed; text and Markdown are limited to 2 MB, while bounded DOCX/PDF imports are limited to 10 MB, 12 PDF pages, and 50 MB of expanded DOCX content. Job-page browser navigation validates the initial URL, redirects, and subresources against resolved public HTTP(S) addresses so manual imports cannot reach loopback, private, link-local, or reserved network services. Cross-origin browser access is intentionally disabled, and profile reads return only API-key configuration flags—not stored key values. Do not bind the current single-user application to a public or shared network interface; public hosting requires authentication, per-user authorization, isolated files/data, and protected secret storage first.
 
 ### Optional anonymous analytics
 

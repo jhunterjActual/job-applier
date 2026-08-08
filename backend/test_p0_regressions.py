@@ -1,10 +1,11 @@
 import json
+import io
 import os
 import re
 import sqlite3
 import tempfile
 import unittest
-import json
+import zipfile
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -18,10 +19,20 @@ import materials as materials_module
 import operations as operations_module
 import searcher as searcher_module
 import source_diagnostics as source_diagnostics_module
+import pymupdf
+from docx import Document as WordDocument
 from fastapi.testclient import TestClient
-from ai_providers import AIProviderError, AIProviderSettings, CapabilityResponse, generate_structured, settings_from_profile
+from ai_providers import AIProviderError, AIProviderSettings, CapabilityResponse, extract_text_from_images, generate_structured, settings_from_profile
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from materials import material_download_name, persist_cover_letter, resolve_output_file
+from resume_documents import (
+    MAX_IMPORTED_RESUME_CHARACTERS,
+    MAX_OCR_RENDER_DIMENSION,
+    MAX_OCR_RENDER_PIXELS,
+    ResumeDocumentError,
+    build_accessible_resume_docx,
+    import_resume_document,
+)
 from maps_providers import (
     HeadquartersResult,
     MapsProviderSettings,
@@ -142,6 +153,37 @@ class AIProviderAbstractionTests(unittest.TestCase):
         self.assertEqual("authentication", raised.exception.code)
         self.assertIn("OpenAI rejected", str(raised.exception))
         self.assertNotIn("private-test-key", str(raised.exception))
+
+    def test_openai_ocr_sends_one_bounded_image_and_keeps_key_out_of_body(self) -> None:
+        output = {
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "# Candidate\n\n- Result"}],
+            }]
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return json.dumps(output).encode("utf-8")
+
+        settings = AIProviderSettings("openai", "gpt-5-mini", "private-ocr-key")
+        checkpoints = []
+        with patch.object(ai_providers_module.urllib.request, "urlopen", return_value=FakeResponse()) as open_url:
+            result = extract_text_from_images(settings, [b"png-test-data"], lambda: checkpoints.append(True))
+
+        request = open_url.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        image_url = payload["input"][0]["content"][1]["image_url"]
+        self.assertEqual(["# Candidate\n\n- Result"], result)
+        self.assertTrue(image_url.startswith("data:image/png;base64,"))
+        self.assertNotIn("private-ocr-key", request.data.decode("utf-8"))
+        self.assertEqual(2, len(checkpoints))
 
     def test_profile_settings_select_the_openai_key_without_exposing_other_secrets(self) -> None:
         settings = settings_from_profile({
@@ -458,6 +500,157 @@ class ApplicationMaterialsSafetyTests(unittest.TestCase):
             self.assertEqual("tailored", connection.execute("SELECT status FROM applications WHERE job_id = 1").fetchone()[0])
             connection.close()
 
+class ResumeDocumentInteroperabilityTests(unittest.TestCase):
+    def test_docx_import_preserves_semantic_headings_lists_and_table_text(self) -> None:
+        document = WordDocument()
+        document.add_heading("Candidate Name", level=1)
+        document.add_heading("Experience", level=2)
+        document.add_paragraph("Delivered measurable results.", style="List Bullet")
+        table = document.add_table(rows=1, cols=2)
+        table.cell(0, 0).text = "Email"
+        table.cell(0, 1).text = "candidate@example.com"
+        buffer = io.BytesIO()
+        document.save(buffer)
+
+        imported = import_resume_document("resume.docx", buffer.getvalue())
+
+        self.assertEqual("docx", imported.source_format)
+        self.assertIn("# Candidate Name", imported.text)
+        self.assertIn("## Experience", imported.text)
+        self.assertIn("- Delivered measurable results.", imported.text)
+        self.assertIn("Email | candidate@example.com", imported.text)
+        self.assertFalse(imported.ocr_used)
+
+    def test_text_pdf_import_remains_local(self) -> None:
+        document = pymupdf.open()
+        page = document.new_page()
+        page.insert_text(
+            (72, 72),
+            "Candidate Name - Experience delivering measurable business outcomes across several roles.",
+        )
+        content = document.tobytes()
+        document.close()
+
+        imported = import_resume_document("resume.pdf", content)
+
+        self.assertEqual("pdf", imported.source_format)
+        self.assertEqual(1, imported.page_count)
+        self.assertFalse(imported.ocr_used)
+        self.assertIn("Candidate Name", imported.text)
+
+    def test_scanned_pdf_requires_explicit_ocr_consent(self) -> None:
+        document = pymupdf.open()
+        document.new_page()
+        content = document.tobytes()
+        document.close()
+
+        with self.assertRaisesRegex(ResumeDocumentError, "Select the AI OCR option"):
+            import_resume_document("resume.pdf", content)
+
+        received = []
+
+        def ocr(images, checkpoint):
+            received.extend(images)
+            if checkpoint:
+                checkpoint()
+            return ["# Candidate Name\n\n## Experience\n\n- OCR result"]
+
+        imported = import_resume_document(
+            "resume.pdf",
+            content,
+            allow_ocr=True,
+            ocr_images=ocr,
+            checkpoint=lambda: None,
+        )
+        self.assertTrue(imported.ocr_used)
+        self.assertEqual(1, len(received))
+        self.assertTrue(received[0].startswith(b"\x89PNG"))
+        self.assertIn("OCR result", imported.text)
+
+    def test_import_bounds_text_and_large_page_ocr_renders(self) -> None:
+        with self.assertRaisesRegex(ResumeDocumentError, "200,000 characters"):
+            import_resume_document("resume.txt", b"a" * (MAX_IMPORTED_RESUME_CHARACTERS + 1))
+
+        document = pymupdf.open()
+        document.new_page(width=10_000, height=10_000)
+        content = document.tobytes()
+        document.close()
+        received = []
+
+        def ocr(images, _checkpoint):
+            received.extend(images)
+            return ["Bounded OCR result with enough readable resume text for the editor."]
+
+        import_resume_document("resume.pdf", content, allow_ocr=True, ocr_images=ocr)
+        rendered = pymupdf.Pixmap(received[0])
+        self.assertLessEqual(max(rendered.width, rendered.height), MAX_OCR_RENDER_DIMENSION)
+        self.assertLessEqual(rendered.width * rendered.height, MAX_OCR_RENDER_PIXELS)
+
+    def test_accessible_docx_uses_real_styles_language_and_hyperlink_relationships(self) -> None:
+        content = build_accessible_resume_docx(
+            "# Candidate Name\n\ncandidate@example.com | (937) 555-0123 | https://example.com\n\n"
+            "## Experience\n\n- Delivered **measurable** results.",
+            candidate_name="Candidate Name",
+            title="Candidate Resume",
+        )
+        loaded = WordDocument(io.BytesIO(content))
+        styles = [paragraph.style.name for paragraph in loaded.paragraphs]
+        relationships = [
+            relationship.target_ref
+            for relationship in loaded.part.rels.values()
+            if relationship.reltype.endswith("/hyperlink")
+        ]
+
+        self.assertEqual("Candidate Resume", loaded.core_properties.title)
+        self.assertEqual("Candidate Name", loaded.core_properties.author)
+        self.assertIn("Heading 1", styles)
+        self.assertIn("Heading 2", styles)
+        self.assertIn("List Bullet", styles)
+        self.assertIn("mailto:candidate@example.com", relationships)
+        self.assertIn("tel:9375550123", relationships)
+        self.assertIn("https://example.com", relationships)
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            styles_xml = archive.read("word/styles.xml").decode("utf-8")
+        self.assertIn('w:val="en-US"', styles_xml)
+
+    def test_docx_download_is_generated_from_reviewed_source_with_safe_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "materials.db"
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE profile (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO profile VALUES (1, 'Candidate Name');
+                CREATE TABLE jobs (
+                    id INTEGER PRIMARY KEY, company TEXT, title TEXT, url TEXT,
+                    source TEXT, status TEXT
+                );
+                INSERT INTO jobs VALUES (
+                    1, 'Example Corp', 'Data Leader', 'https://example.test/job', 'manual', 'tailored'
+                );
+                CREATE TABLE applications (job_id INTEGER PRIMARY KEY, tailored_resume_text TEXT);
+                INSERT INTO applications VALUES (
+                    1, '# Candidate Name\n\n## Experience\n\n- Evidence-based result.'
+                );
+            """)
+            connection.close()
+
+            def connection_factory():
+                test_connection = sqlite3.connect(database_path)
+                test_connection.row_factory = sqlite3.Row
+                return test_connection
+
+            with patch.object(app_module, "get_db_connection", side_effect=connection_factory):
+                response = app_module.download_tailored_resume_docx(1)
+
+        self.assertEqual(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            response.media_type,
+        )
+        self.assertIn("example-corp-data-leader-resume-accessible.docx", response.headers["content-disposition"])
+        loaded = WordDocument(io.BytesIO(response.body))
+        self.assertEqual("Candidate Name", loaded.paragraphs[0].text)
+
+
 class ResumeRenderingTests(unittest.TestCase):
     def test_tailoring_uses_validated_structured_response(self) -> None:
         generated = {
@@ -498,7 +691,7 @@ class FrontendStartupTests(unittest.TestCase):
             "cleanup-jobs-btn", "refresh-logs-btn", "open-manual-application-btn",
             "archive-untouched-btn", "delete-untouched-btn", "restore-archived-btn",
             "lifecycle-form", "undo-lifecycle-btn", "save-materials-btn",
-            "download-resume-btn", "download-cover-letter-btn",
+            "download-resume-btn", "download-resume-docx-btn", "download-cover-letter-btn",
             "saved-search-select", "p-resume-mode",
             "p-ai-provider", "p-ai-model", "p-openai-apikey",
             "p-openai-key-status", "p-openai-key-help", "test-ai-provider-btn",
@@ -521,14 +714,14 @@ class FrontendStartupTests(unittest.TestCase):
             "loading-actions", "stop-loading-btn",
             "base-resume-select", "p-resume-name", "new-base-resume-btn",
             "duplicate-base-resume-btn", "base-resume-history-btn",
-            "delete-base-resume-btn", "base-resume-history-modal",
+            "delete-base-resume-btn", "resume-ocr-consent", "base-resume-history-modal",
             "base-resume-version-list", "restore-base-resume-version-btn",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-9", html_source)
-        self.assertIn("index.css?v=20260808-9", html_source)
+        self.assertIn("app.js?v=20260808-10", html_source)
+        self.assertIn("index.css?v=20260808-10", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -536,7 +729,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.9", source)
+                self.assertIn("20260808.10", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -557,6 +750,12 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn('bindEvent(baseResumeHistoryBtn, "click", showBaseResumeHistory)', script_source)
         self.assertIn('bindEvent(deleteBaseResumeBtn, "click", removeBaseResume)', script_source)
         self.assertIn("baseResumeVersionPreviewContent.textContent = version.content", script_source)
+
+    def test_document_import_and_docx_download_controls_are_bound(self) -> None:
+        script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('formData.append("allow_ocr",', script_source)
+        self.assertIn("/materials/resume.docx", script_source)
+        self.assertIn('bindEvent(resumeFileUpload, "change", handleResumeUpload)', script_source)
 
     def test_launchers_use_the_configurable_default_port(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -709,7 +908,7 @@ class DependencyLockTests(unittest.TestCase):
         self.assertEqual(
             {
                 "exceptiongroup", "fastapi", "google-genai", "playwright", "posthog",
-                "pydantic", "python-multipart", "uvicorn",
+                "pydantic", "pymupdf", "python-docx", "python-multipart", "uvicorn",
             },
             direct_names,
         )

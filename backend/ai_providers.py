@@ -1,5 +1,6 @@
-"""Server-side AI provider selection and structured-output adapters."""
+"""Server-side AI provider selection and structured/multimodal adapters."""
 
+import base64
 import json
 import urllib.error
 import urllib.request
@@ -285,6 +286,79 @@ def _generate_openai(settings: AIProviderSettings, prompt: str, schema: type[Bas
     return _validated_data(_openai_output_text(document), schema, "openai")
 
 
+def _generate_gemini_image_text(settings: AIProviderSettings, prompt: str, image: bytes) -> str:
+    try:
+        client = genai.Client(api_key=settings.api_key)
+        response = client.models.generate_content(
+            model=settings.model,
+            contents=[prompt, types.Part.from_bytes(data=image, mime_type="image/png")],
+        )
+    except AIProviderError:
+        raise
+    except Exception as exc:
+        raise _gemini_error(exc) from exc
+    text = (getattr(response, "text", "") or "").strip()
+    if not text:
+        raise AIProviderError("gemini", "empty_response", "Google Gemini could not read text from a resume page image.")
+    return text
+
+
+def _generate_openai_image_text(settings: AIProviderSettings, prompt: str, image: bytes) -> str:
+    payload = {
+        "model": settings.model,
+        "input": [{
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": prompt},
+                {
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{base64.b64encode(image).decode('ascii')}",
+                },
+            ],
+        }],
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {settings.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "JobApplierAgent/1",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=PROVIDER_TIMEOUT_SECONDS) as response:
+            raw = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 400:
+            raise AIProviderError(
+                "openai",
+                "unsupported_request",
+                "OpenAI rejected the OCR request. Check that the selected model supports image input.",
+            ) from exc
+        raise _openai_http_error(exc) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise AIProviderError(
+            "openai",
+            "network",
+            "OpenAI could not be reached. Check the network connection and try again.",
+        ) from exc
+    except Exception as exc:
+        raise AIProviderError("openai", "provider_error", "OpenAI could not complete the OCR request.") from exc
+
+    if len(raw) > MAX_PROVIDER_RESPONSE_BYTES:
+        raise AIProviderError("openai", "oversized_response", "OpenAI returned an unexpectedly large OCR response.")
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AIProviderError("openai", "invalid_response", "OpenAI returned an OCR response that could not be read.") from exc
+    text = _openai_output_text(document).strip()
+    if not text:
+        raise AIProviderError("openai", "empty_response", "OpenAI could not read text from a resume page image.")
+    return text
+
+
 def generate_structured(settings: AIProviderSettings, prompt: str, schema: type[BaseModel]) -> dict:
     """Generate and validate structured data through the selected provider."""
     provider = normalize_provider(settings.provider)
@@ -302,6 +376,45 @@ def generate_structured(settings: AIProviderSettings, prompt: str, schema: type[
     if provider == "openai":
         return _generate_openai(normalized, prompt, schema)
     return _generate_gemini(normalized, prompt, schema)
+
+
+def extract_text_from_images(
+    settings: AIProviderSettings,
+    images: list[bytes],
+    cancel_check=None,
+) -> list[str]:
+    """OCR bounded resume-page images through the explicitly selected provider."""
+    provider = normalize_provider(settings.provider)
+    normalized = AIProviderSettings(
+        provider,
+        (settings.model or default_model(provider)).strip(),
+        (settings.api_key or "").strip(),
+    )
+    if not normalized.api_key:
+        raise AIProviderError(
+            provider,
+            "missing_key",
+            f"{provider_label(provider)} API key is not configured. Save one in Profile & Resume before using AI OCR.",
+        )
+    prompt = (
+        "Transcribe all visible resume text from this single page in natural reading order. "
+        "Preserve headings, bullets, dates, names, URLs, and email addresses using plain text or Markdown. "
+        "Do not summarize, correct, infer, or invent content. Return only the transcription."
+    )
+    results: list[str] = []
+    for image in images:
+        if cancel_check:
+            cancel_check()
+        if not image:
+            raise AIProviderError(provider, "invalid_input", "A resume page image was empty before OCR.")
+        if provider == "openai":
+            text = _generate_openai_image_text(normalized, prompt, image)
+        else:
+            text = _generate_gemini_image_text(normalized, prompt, image)
+        results.append(text)
+        if cancel_check:
+            cancel_check()
+    return results
 
 
 def validate_provider_capability(settings: AIProviderSettings) -> dict:

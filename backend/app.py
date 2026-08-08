@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 from datetime import date, datetime, timedelta
@@ -17,6 +17,7 @@ import config
 from ai_providers import (
     AIProviderError,
     default_model,
+    extract_text_from_images,
     normalize_provider,
     provider_key_configured,
     settings_from_profile,
@@ -47,6 +48,7 @@ from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import is_job_suppressed, record_job_suppression
 from source_diagnostics import list_source_diagnostics, persist_source_diagnostics
 from materials import cover_letter_output_path, material_download_name, persist_cover_letter, resolve_output_file
+from resume_documents import ResumeDocumentError, build_accessible_resume_docx, import_resume_document
 from base_resumes import (
     BaseResumeNotFound,
     LastBaseResumeError,
@@ -77,8 +79,9 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.9"
+APP_BUILD = "20260808.10"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
+MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -523,11 +526,13 @@ def validate_selected_maps_provider(
 @app.post("/api/profile/upload-resume")
 async def upload_resume(
     file: UploadFile = File(...),
+    allow_ocr: bool = Form(False),
     operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
 ) -> dict:
     """
-    Handle uploading a base resume in text or markdown format and return its text
-    to the editor. The user explicitly saves it as a version afterward.
+    Import a text, Markdown, DOCX, or PDF base resume and return editable text.
+    Scanned PDF pages use the selected AI provider only with explicit consent.
+    The user explicitly saves the imported text as a version afterward.
     
     Args:
         file (UploadFile): The uploaded file resource.
@@ -535,8 +540,12 @@ async def upload_resume(
     Returns:
         dict: Success status and the parsed resume text.
     """
-    if not (file.filename or "").lower().endswith(('.txt', '.md')):
-        raise HTTPException(status_code=400, detail="Only .txt and .md text files are supported for resume upload.")
+    filename = file.filename or ""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".txt", ".md", ".docx", ".pdf"}:
+        raise HTTPException(status_code=400, detail="Resume imports support .txt, .md, .docx, and .pdf files.")
+    maximum_bytes = MAX_RESUME_UPLOAD_BYTES if suffix in {".txt", ".md"} else MAX_RESUME_DOCUMENT_UPLOAD_BYTES
+    maximum_label = "2 MB" if maximum_bytes == MAX_RESUME_UPLOAD_BYTES else "10 MB"
 
     operation = start_operation(operation_id)
     try:
@@ -544,22 +553,44 @@ async def upload_resume(
         while chunk := await file.read(64 * 1024):
             operation.checkpoint()
             content.extend(chunk)
-            if len(content) > MAX_RESUME_UPLOAD_BYTES:
+            if len(content) > maximum_bytes:
                 raise HTTPException(
                     status_code=413,
-                    detail="Resume files must be 2 MB or smaller.",
+                    detail=f"{suffix[1:].upper()} resume files must be {maximum_label} or smaller.",
                 )
-        try:
-            resume_text = content.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise HTTPException(status_code=400, detail="Resume files must use UTF-8 text encoding.") from exc
+
+        def ocr_pages(images: list[bytes], checkpoint) -> list[str]:
+            conn = get_db_connection()
+            try:
+                profile = conn.execute("SELECT * FROM profile WHERE id = 1").fetchone()
+            finally:
+                conn.close()
+            return extract_text_from_images(settings_from_profile(profile), images, checkpoint)
+
+        imported = import_resume_document(
+            filename,
+            bytes(content),
+            allow_ocr=allow_ocr,
+            ocr_images=ocr_pages if allow_ocr else None,
+            checkpoint=operation.checkpoint,
+        )
 
         operation.checkpoint()
-        return {"success": True, "resume_text": resume_text}
+        return {
+            "success": True,
+            "resume_text": imported.text,
+            "source_format": imported.source_format,
+            "ocr_used": imported.ocr_used,
+            "page_count": imported.page_count,
+        }
     except OperationCancelled:
         return {"success": False, "cancelled": True, "message": "Resume import stopped before the editor changed."}
     except HTTPException:
         raise
+    except ResumeDocumentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except AIProviderError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Failed to read the resume file.") from exc
     finally:
@@ -1549,6 +1580,7 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
         "headquarters_attribution": headquarters.attribution,
         "headquarters_warning": headquarters.warning,
         "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
+        "resume_docx_download_url": f"/api/jobs/{job_id}/materials/resume.docx",
         "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",
         "manual_application_url": f"/api/jobs/{job_id}/apply-manually",
         "pdf_page_count": pdf_result["page_count"],
@@ -1601,6 +1633,7 @@ def get_tailored_details(job_id: int) -> dict:
             "base_resume_name": app_row["base_resume_name"],
             "base_resume_version": app_row["base_resume_version"],
             "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
+            "resume_docx_download_url": f"/api/jobs/{job_id}/materials/resume.docx",
             "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",
             "manual_application_url": f"/api/jobs/{job_id}/apply-manually",
         }
@@ -1690,6 +1723,7 @@ def _update_tailored_details(job_id: int, req: MaterialsUpdateRequest, operation
         "pdf_page_count": pdf_result["page_count"],
         "pdf_compact": pdf_result["compact"],
         "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
+        "resume_docx_download_url": f"/api/jobs/{job_id}/materials/resume.docx",
         "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",
     }
 
@@ -1734,6 +1768,45 @@ def download_tailored_resume(job_id: int) -> FileResponse:
         filename=material_download_name(
             material["job_company"], material["job_title"], "resume", ".pdf"
         ),
+    )
+
+
+@app.get("/api/jobs/{job_id}/materials/resume.docx")
+def download_tailored_resume_docx(job_id: int) -> Response:
+    """Build an accessible, editable DOCX from the reviewed tailored source."""
+    material = _application_materials(job_id)
+    resume_text = (material["tailored_resume_text"] or "").strip()
+    if not resume_text:
+        raise HTTPException(status_code=404, detail="The editable tailored resume source is unavailable.")
+    conn = get_db_connection()
+    try:
+        profile = conn.execute("SELECT name FROM profile WHERE id = 1").fetchone()
+    finally:
+        conn.close()
+    candidate_name = profile["name"] if profile and profile["name"] else ""
+    try:
+        content = build_accessible_resume_docx(
+            resume_text,
+            candidate_name=candidate_name,
+            title=f"{candidate_name or 'Candidate'} - {material['job_title']} Resume",
+        )
+    except ResumeDocumentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    filename = material_download_name(
+        material["job_company"], material["job_title"], "resume-accessible", ".docx"
+    )
+    capture_event(
+        "material_downloaded",
+        {
+            "result": "success",
+            "source_category": source_category(material["job_source"]),
+            "material_type": "resume",
+        },
+    )
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
