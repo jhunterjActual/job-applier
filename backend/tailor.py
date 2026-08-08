@@ -75,16 +75,16 @@ RESUME_MODE_GUIDANCE = {
 }
 
 RESUME_SECTION_TEMPLATES = {
-    "it": ("Summary", "Technical Skills", "Professional Experience", "Projects", "Certifications", "Education"),
-    "technical_executive": ("Executive Summary", "Leadership Competencies", "Professional Experience", "Board & Advisory", "Education", "Certifications"),
-    "general_professional": ("Professional Summary", "Core Skills", "Professional Experience", "Projects", "Certifications", "Education"),
-    "federal": ("Summary of Qualifications", "Core Competencies", "Professional Experience", "Education", "Certifications"),
-    "healthcare": ("Professional Summary", "Licenses & Certifications", "Professional Experience", "Skills", "Education"),
-    "education": ("Professional Summary", "Credentials", "Teaching Experience", "Education", "Research & Publications", "Service"),
-    "sales": ("Professional Summary", "Sales Competencies", "Professional Experience", "Achievements", "Education"),
-    "trades_operations": ("Summary", "Licenses & Certifications", "Skills", "Professional Experience", "Education"),
-    "academic_cv": ("Education", "Academic Appointments", "Research", "Publications", "Teaching", "Grants & Awards", "Service", "Professional Experience"),
-    "cover_letter": ("Professional Summary", "Core Skills", "Professional Experience", "Projects", "Certifications", "Education"),
+    "it": ("Summary", "Technical Skills", "Professional Experience", "Projects", "Portfolio & Work Samples", "Licenses & Certifications", "Education"),
+    "technical_executive": ("Executive Summary", "Leadership Competencies", "Professional Experience", "Selected Projects", "Board & Advisory", "Portfolio & Work Samples", "Licenses & Certifications", "Education"),
+    "general_professional": ("Professional Summary", "Core Skills", "Professional Experience", "Projects", "Portfolio & Work Samples", "Licenses & Certifications", "Education"),
+    "federal": ("Summary of Qualifications", "Core Competencies", "Professional Experience", "Projects & Work Samples", "Licenses & Certifications", "Education"),
+    "healthcare": ("Professional Summary", "Licenses & Certifications", "Clinical Skills", "Professional Experience", "Projects & Work Samples", "Education"),
+    "education": ("Professional Summary", "Credentials & Licenses", "Teaching Experience", "Education", "Projects & Work Samples", "Research & Publications", "Service"),
+    "sales": ("Professional Summary", "Sales Competencies", "Professional Experience", "Achievements", "Projects & Work Samples", "Certifications", "Education"),
+    "trades_operations": ("Summary", "Licenses & Certifications", "Skills", "Professional Experience", "Projects & Work Samples", "Education"),
+    "academic_cv": ("Education", "Academic Appointments", "Research", "Projects & Work Samples", "Publications", "Teaching", "Grants & Awards", "Portfolio", "Service", "Professional Experience"),
+    "cover_letter": ("Professional Summary", "Core Skills", "Professional Experience", "Projects", "Portfolio & Work Samples", "Licenses & Certifications", "Education"),
 }
 
 
@@ -98,6 +98,7 @@ def _canonical_section(title: str, template: tuple[str, ...]) -> str | None:
         (("skill", "competenc", "expertise", "technolog"), ("skill", "competenc")),
         (("experience", "employment", "career"), ("experience", "appointments")),
         (("project",), ("project",)),
+        (("portfolio", "work sample"), ("portfolio", "work sample", "project")),
         (("certif", "license", "credential"), ("certif", "license", "credential")),
         (("education",), ("education",)),
         (("publication",), ("publication",)),
@@ -108,7 +109,10 @@ def _canonical_section(title: str, template: tuple[str, ...]) -> str | None:
     )
     for source_terms, target_terms in semantic:
         if any(term in normalized for term in source_terms):
-            match = next((section for section in template if any(term in section.lower() for term in target_terms)), None)
+            match = next(
+                (section for term in target_terms for section in template if term in section.lower()),
+                None,
+            )
             if match:
                 return match
     return None
@@ -150,6 +154,7 @@ def tailor_resume_and_cover_letter(
     cancel_check: Callable[[], None] | None = None,
     ai_provider: str = "gemini",
     ai_model: str | None = None,
+    professional_evidence: str = "",
 ) -> dict:
     """
     Consolidates resume tailoring and cover letter drafting into one structured AI request.
@@ -173,6 +178,7 @@ def tailor_resume_and_cover_letter(
     mode_guidance = RESUME_MODE_GUIDANCE.get(resume_mode, RESUME_MODE_GUIDANCE["general_professional"])
     section_template = RESUME_SECTION_TEMPLATES.get(resume_mode, RESUME_SECTION_TEMPLATES["general_professional"])
     page_contract = "The academic CV may exceed two pages when the evidenced content requires it." if resume_mode == "academic_cv" else "The resume must fit within two US Letter pages at 10-point type."
+    supplemental_evidence = professional_evidence.strip() or "No supplemental professional evidence was provided."
 
     # Combine resume tailoring and cover letter writing into a single prompt.
     prompt = f"""
@@ -191,7 +197,7 @@ def tailor_resume_and_cover_letter(
     - {page_contract}
     - Use only standard Markdown headings (#, ##, ###), paragraphs, bold/italics, and flat bullet lists.
     - Do not use horizontal rules, tables, columns, images, badges, skill ratings, or decorative symbols.
-    - Use conventional section names appropriate to the profession, such as Summary, Skills, Experience, Projects, Licenses, Certifications, and Education.
+    - Use the supplied template's conventional section names for the profession, including relevant Skills, Projects, Portfolio, Work Samples, Licenses, and Certifications sections only when supported by evidence.
     - Limit the summary to 3-4 lines. Use at most 4-6 concise bullets for the most recent role and 2-3 for older roles. Each bullet should normally fit in 1-2 lines.
     - Prefer demonstrated outcomes over keyword repetition. Remove or compress older and irrelevant material instead of shrinking the text.
     
@@ -203,6 +209,10 @@ def tailor_resume_and_cover_letter(
     
     Candidate's Base Resume:
     \"\"\"{base_resume_text}\"\"\"
+
+    Candidate's Supplemental Professional Evidence:
+    \"\"\"{supplemental_evidence}\"\"\"
+    Treat these notes as factual source material supplied by the candidate. Use only relevant items, preserve URLs when useful, and never infer or invent missing dates, issuers, credential status, project outcomes, or metrics.
     
     Return the complete tailored resume and cover letter using the supplied response schema.
     """

@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-11">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-12">
 </head>
 <body>
     <div class="app-container">
@@ -297,6 +297,42 @@
                                 <label for="p-resume-name">Resume name</label>
                                 <input type="text" id="p-resume-name" maxlength="120" placeholder="e.g. Data Leadership" required>
                             </div>
+                            <details class="professional-evidence-editor margin-bottom-md" id="professional-evidence-editor">
+                                <summary>
+                                    <span><i class="fa-solid fa-layer-group" aria-hidden="true"></i> Role-specific professional evidence</span>
+                                    <span class="cleanup-count-badge" id="professional-evidence-count" hidden>0 sections</span>
+                                </summary>
+                                <div class="professional-evidence-body">
+                                    <p class="form-help" id="evidence-mode-guidance">Add factual evidence that the selected resume mode should emphasize. Enter one item per line.</p>
+                                    <div class="professional-evidence-grid">
+                                        <div class="form-group">
+                                            <label for="p-evidence-skills">Skills</label>
+                                            <textarea id="p-evidence-skills" rows="3" maxlength="10000" aria-describedby="evidence-mode-guidance" placeholder="Cloud architecture&#10;Team leadership&#10;Process improvement"></textarea>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="p-evidence-projects">Projects</label>
+                                            <textarea id="p-evidence-projects" rows="3" maxlength="10000" aria-describedby="evidence-mode-guidance" placeholder="Project name — your role, verified outcome, technologies or methods"></textarea>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="p-evidence-portfolio">Portfolio links</label>
+                                            <textarea id="p-evidence-portfolio" rows="3" maxlength="10000" aria-describedby="evidence-mode-guidance" placeholder="Architecture portfolio — https://example.com/work"></textarea>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="p-evidence-licenses">Professional licenses</label>
+                                            <textarea id="p-evidence-licenses" rows="3" maxlength="10000" aria-describedby="evidence-mode-guidance" placeholder="License — jurisdiction, status, expiration when known"></textarea>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="p-evidence-certifications">Certifications</label>
+                                            <textarea id="p-evidence-certifications" rows="3" maxlength="10000" aria-describedby="evidence-mode-guidance" placeholder="Certification — issuer, year when known"></textarea>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="p-evidence-work-samples">Work samples</label>
+                                            <textarea id="p-evidence-work-samples" rows="3" maxlength="10000" aria-describedby="evidence-mode-guidance" placeholder="Writing sample, presentation, lesson plan, case study, design, or other relevant artifact"></textarea>
+                                        </div>
+                                    </div>
+                                    <small class="form-help">Evidence is saved and versioned with this base resume. When you click Tailor Materials, entered evidence is sent to your selected AI provider; irrelevant entries may be omitted, but missing details or credentials must not be invented.</small>
+                                </div>
+                            </details>
                             <textarea id="p-resume" class="resume-textarea flex-grow" placeholder="Paste your resume content in Plain Text or Markdown format here..." required></textarea>
                             <label class="resume-ocr-consent margin-top-sm" for="resume-ocr-consent">
                                 <input type="checkbox" id="resume-ocr-consent">
@@ -908,6 +944,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-11"></script>
+    <script src="/static/app.js?v=20260808-12"></script>
 </body>
 </html>

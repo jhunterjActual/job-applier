@@ -55,12 +55,14 @@ from base_resumes import (
     LastBaseResumeError,
     MAX_BASE_RESUME_CHARS,
     MAX_BASE_RESUME_NAME,
+    MAX_EVIDENCE_FIELD_CHARS,
     activate_base_resume,
     delete_base_resume,
     get_base_resume,
     get_version,
     list_base_resumes,
     list_versions,
+    professional_evidence_markdown,
     restore_version,
     save_base_resume,
 )
@@ -80,7 +82,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.11"
+APP_BUILD = "20260808.12"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -229,6 +231,15 @@ async def protect_local_browser_boundary(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store, max-age=0"
     return response
 
+class ProfessionalEvidenceUpdate(BaseModel):
+    skills: str = Field(default="", max_length=MAX_EVIDENCE_FIELD_CHARS)
+    projects: str = Field(default="", max_length=MAX_EVIDENCE_FIELD_CHARS)
+    portfolio: str = Field(default="", max_length=MAX_EVIDENCE_FIELD_CHARS)
+    licenses: str = Field(default="", max_length=MAX_EVIDENCE_FIELD_CHARS)
+    certifications: str = Field(default="", max_length=MAX_EVIDENCE_FIELD_CHARS)
+    work_samples: str = Field(default="", max_length=MAX_EVIDENCE_FIELD_CHARS)
+
+
 class ProfileUpdate(BaseModel):
     name: str
     email: str
@@ -239,6 +250,7 @@ class ProfileUpdate(BaseModel):
     base_resume_id: Optional[int] = Field(default=None, gt=0)
     base_resume_name: str = Field(default="Primary Resume", min_length=1, max_length=MAX_BASE_RESUME_NAME)
     base_resume_text: str = Field(max_length=MAX_BASE_RESUME_CHARS)
+    professional_evidence: Optional[ProfessionalEvidenceUpdate] = None
     resume_mode: Literal["it", "technical_executive", "general_professional", "federal", "healthcare", "education", "sales", "trades_operations", "academic_cv", "cover_letter"] = "general_professional"
     ai_provider: Literal["gemini", "openai"] = "gemini"
     ai_model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._:/-]+$")
@@ -352,6 +364,7 @@ def update_profile(profile: ProfileUpdate) -> dict:
                 profile.base_resume_name,
                 profile.resume_mode,
                 profile.base_resume_text,
+                profile.professional_evidence.model_dump() if profile.professional_evidence else None,
             )
             activate_base_resume(conn, resume["id"])
         conn.execute("""
@@ -1424,6 +1437,7 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     source_resume_id = profile["active_base_resume_id"] if "active_base_resume_id" in profile.keys() else None
     source_resume_name = None
     source_resume_version = None
+    source_professional_evidence = ""
     if source_resume_id:
         source_resume = conn.execute(
             """
@@ -1438,6 +1452,9 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
         if source_resume:
             source_resume_name = source_resume["name"]
             source_resume_version = source_resume["version_number"]
+            source_professional_evidence = professional_evidence_markdown(
+                get_base_resume(conn, source_resume_id)["professional_evidence"]
+            )
 
     conn.close()
     
@@ -1453,6 +1470,7 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
         cancel_check=operation.checkpoint,
         ai_provider=ai_settings.provider,
         ai_model=ai_settings.model,
+        professional_evidence=source_professional_evidence,
     )
     operation.checkpoint()
     if not res.get("success"):

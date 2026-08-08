@@ -57,6 +57,7 @@ from base_resumes import (
     delete_base_resume,
     get_base_resume,
     list_versions,
+    professional_evidence_markdown,
     restore_version,
     save_base_resume,
 )
@@ -670,6 +671,32 @@ class ResumeRenderingTests(unittest.TestCase):
         self.assertIn("## Professional Summary", result["tailored_resume"])
         self.assertIs(provider_call.call_args.args[2], TailoringResponse)
 
+    def test_tailoring_prompt_includes_only_supplied_professional_evidence(self) -> None:
+        generated = {
+            "tailored_resume": "# Candidate\n\n## Summary\n\nEvidence-based summary.",
+            "cover_letter": "August 8, 2026\n\nDear Hiring Team,\n\nI am interested.",
+        }
+        evidence = professional_evidence_markdown({
+            "skills": "Python\nCloud architecture",
+            "portfolio": "Design portfolio — https://example.test/portfolio",
+        })
+        with patch("tailor.generate_structured", return_value=generated) as provider_call:
+            result = tailor_resume_and_cover_letter(
+                "# Candidate\n\n## Experience\n\nEvidence.",
+                "Architect",
+                "Example Company",
+                "Lead cloud architecture.",
+                resume_mode="it",
+                professional_evidence=evidence,
+            )
+
+        prompt = provider_call.call_args.args[1]
+        self.assertTrue(result["success"])
+        self.assertIn("### Skills", prompt)
+        self.assertIn("https://example.test/portfolio", prompt)
+        self.assertIn("never infer or invent missing dates", prompt)
+        self.assertNotIn("### Licenses", prompt)
+
     def test_markdown_is_escaped_and_supported_tokens_are_rendered(self) -> None:
         rendered = markdown_to_html(
             "# Candidate\n\n---\n\n## Experience\n\n### Role\n\n"
@@ -799,6 +826,10 @@ class FrontendStartupTests(unittest.TestCase):
             "duplicate-base-resume-btn", "base-resume-history-btn",
             "delete-base-resume-btn", "resume-ocr-consent", "base-resume-history-modal",
             "base-resume-version-list", "restore-base-resume-version-btn",
+            "professional-evidence-editor", "professional-evidence-count",
+            "evidence-mode-guidance", "p-evidence-skills", "p-evidence-projects",
+            "p-evidence-portfolio", "p-evidence-licenses",
+            "p-evidence-certifications", "p-evidence-work-samples",
             "advanced-job-filters", "job-active-filter-count",
             "job-employment-filter", "job-commute-filter",
             "job-min-annual-compensation", "job-min-hourly-rate",
@@ -810,8 +841,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-11", html_source)
-        self.assertIn("index.css?v=20260808-11", html_source)
+        self.assertIn("app.js?v=20260808-12", html_source)
+        self.assertIn("index.css?v=20260808-12", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -819,7 +850,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.11", source)
+                self.assertIn("20260808.12", source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -843,12 +874,16 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn("Apply Manually", script_source)
 
     def test_base_resume_controls_are_bound_to_versioned_workflows(self) -> None:
+        app_source = (Path(__file__).parent / "app.py").read_text(encoding="utf-8")
         script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('bindEvent(newBaseResumeBtn, "click", startNewBaseResume)', script_source)
         self.assertIn('bindEvent(duplicateBaseResumeBtn, "click", beginBaseResumeCopy)', script_source)
         self.assertIn('bindEvent(baseResumeHistoryBtn, "click", showBaseResumeHistory)', script_source)
         self.assertIn('bindEvent(deleteBaseResumeBtn, "click", removeBaseResume)', script_source)
-        self.assertIn("baseResumeVersionPreviewContent.textContent = version.content", script_source)
+        self.assertIn("professionalEvidencePreview(version.professional_evidence)", script_source)
+        self.assertIn("ROLE-SPECIFIC PROFESSIONAL EVIDENCE", script_source)
+        self.assertIn("professional_evidence: readProfessionalEvidence()", script_source)
+        self.assertIn("profile.professional_evidence.model_dump()", app_source)
 
     def test_document_import_and_docx_download_controls_are_bound(self) -> None:
         script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
@@ -1712,12 +1747,14 @@ class BaseResumeVersionTests(unittest.TestCase):
             CREATE TABLE base_resumes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
                 resume_mode TEXT NOT NULL, content TEXT NOT NULL,
+                evidence_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE base_resume_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, base_resume_id INTEGER NOT NULL,
                 version_number INTEGER NOT NULL, name TEXT NOT NULL,
-                resume_mode TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL,
+                resume_mode TEXT NOT NULL, content TEXT NOT NULL,
+                evidence_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
                 UNIQUE(base_resume_id, version_number),
                 FOREIGN KEY (base_resume_id) REFERENCES base_resumes(id) ON DELETE CASCADE
             );
@@ -1733,7 +1770,8 @@ class BaseResumeVersionTests(unittest.TestCase):
         )
         activate_base_resume(self.connection, created["id"])
         unchanged = save_base_resume(
-            self.connection, created["id"], "Data Leadership", "technical_executive", "Version one"
+            self.connection, created["id"], "Data Leadership", "technical_executive", "Version one",
+            {"skills": "", "work_samples": ""},
         )
         updated = save_base_resume(
             self.connection, created["id"], "Data Leadership", "technical_executive", "Version two"
@@ -1747,10 +1785,14 @@ class BaseResumeVersionTests(unittest.TestCase):
 
     def test_restore_creates_a_new_version_and_syncs_the_active_profile(self) -> None:
         created = save_base_resume(
-            self.connection, None, "Primary", "it", "Original"
+            self.connection, None, "Primary", "it", "Original",
+            {"skills": "Python", "portfolio": "Architecture — https://example.test/work"},
         )
         activate_base_resume(self.connection, created["id"])
-        save_base_resume(self.connection, created["id"], "Primary", "it", "Edited")
+        save_base_resume(
+            self.connection, created["id"], "Primary", "it", "Edited",
+            {"skills": "Python\nGo", "certifications": "Cloud certification"},
+        )
 
         restored = restore_version(self.connection, created["id"], 1)
         profile = self.connection.execute(
@@ -1759,7 +1801,30 @@ class BaseResumeVersionTests(unittest.TestCase):
 
         self.assertEqual(3, restored["version_number"])
         self.assertEqual("Original", get_base_resume(self.connection, created["id"])["content"])
+        self.assertEqual("Python", restored["professional_evidence"]["skills"])
+        self.assertIn("https://example.test/work", restored["professional_evidence"]["portfolio"])
         self.assertEqual(("Original", "it", ""), tuple(profile))
+
+    def test_evidence_only_change_creates_a_version(self) -> None:
+        created = save_base_resume(
+            self.connection, None, "Operations", "trades_operations", "Resume",
+            {"licenses": "CDL-A"},
+        )
+        updated = save_base_resume(
+            self.connection, created["id"], "Operations", "trades_operations", "Resume",
+            {"licenses": "CDL-A", "work_samples": "Safety case study"},
+        )
+
+        self.assertTrue(updated["version_created"])
+        self.assertEqual(2, updated["version_number"])
+        self.assertEqual("Safety case study", updated["professional_evidence"]["work_samples"])
+        self.assertEqual(2, list_versions(self.connection, created["id"])[0]["evidence_section_count"])
+        backward_compatible = save_base_resume(
+            self.connection, created["id"], "Operations", "trades_operations", "Updated resume"
+        )
+        self.assertEqual("CDL-A", backward_compatible["professional_evidence"]["licenses"])
+        self.assertEqual("Safety case study", backward_compatible["professional_evidence"]["work_samples"])
+        self.assertNotIn("evidence_json", backward_compatible)
 
     def test_deleting_active_resume_selects_fallback_but_protects_last_resume(self) -> None:
         first = save_base_resume(self.connection, None, "First", "it", "One")
@@ -1791,12 +1856,13 @@ class HeadquartersPreferenceTests(unittest.TestCase):
                 );
                 CREATE TABLE base_resumes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, resume_mode TEXT,
-                    content TEXT, created_at TEXT, updated_at TEXT
+                    content TEXT, evidence_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT, updated_at TEXT
                 );
                 CREATE TABLE base_resume_versions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, base_resume_id INTEGER,
                     version_number INTEGER, name TEXT, resume_mode TEXT,
-                    content TEXT, created_at TEXT
+                    content TEXT, evidence_json TEXT NOT NULL DEFAULT '{}', created_at TEXT
                 );
                 INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 'google', 1, '', NULL);
             """)
@@ -2353,6 +2419,12 @@ class ResumeTemplateTests(unittest.TestCase):
         self.assertLess(result.index("## Summary"), result.index("## Technical Skills"))
         self.assertLess(result.index("## Technical Skills"), result.index("## Professional Experience"))
 
+    def test_portfolio_and_work_samples_map_to_role_specific_section(self) -> None:
+        source = "# Candidate\n\n## Portfolio\nhttps://example.test/work\n\n## Experience\nRole details"
+        result = apply_resume_section_template(source, "it")
+        self.assertIn("## Portfolio & Work Samples", result)
+        self.assertLess(result.index("## Professional Experience"), result.index("## Portfolio & Work Samples"))
+
     def test_unknown_sections_are_rejected_instead_of_silently_dropped(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported section"):
             apply_resume_section_template("# Candidate\n\n## Mystery Material\nText", "it")
@@ -2552,6 +2624,8 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
             )}
             profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(profile)")}
             application_columns = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
+            base_resume_columns = {row[1] for row in connection.execute("PRAGMA table_info(base_resumes)")}
+            base_resume_version_columns = {row[1] for row in connection.execute("PRAGMA table_info(base_resume_versions)")}
             maps_provider = connection.execute("SELECT maps_provider FROM profile WHERE id = 1").fetchone()[0]
             connection.close()
         self.assertIn("source_diagnostics", tables)
@@ -2562,6 +2636,8 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
         self.assertIn("idx_base_resume_versions_resume", indexes)
         self.assertIn("maps_provider", profile_columns)
         self.assertIn("active_base_resume_id", profile_columns)
+        self.assertIn("evidence_json", base_resume_columns)
+        self.assertIn("evidence_json", base_resume_version_columns)
         self.assertEqual("openstreetmap", maps_provider)
         self.assertTrue({
             "headquarters_source", "headquarters_attribution", "base_resume_id",
