@@ -63,6 +63,7 @@ const baseResumeHistoryBtn = document.getElementById("base-resume-history-btn");
 const deleteBaseResumeBtn = document.getElementById("delete-base-resume-btn");
 const pPreferUsHeadquarters = document.getElementById("p-prefer-us-headquarters");
 const resumeFileUpload = document.getElementById("resume-file-upload");
+const resumeOcrConsent = document.getElementById("resume-ocr-consent");
 const toggleApiVisibilityBtn = document.getElementById("toggle-api-visibility");
 const toggleOpenAIApiVisibilityBtn = document.getElementById("toggle-openai-api-visibility");
 const toggleGoogleApiVisibilityBtn = document.getElementById("toggle-google-api-visibility");
@@ -132,6 +133,7 @@ const tailoredResumeDisplay = document.getElementById("tailored-resume-display")
 const coverLetterDisplay = document.getElementById("cover-letter-display");
 const saveMaterialsBtn = document.getElementById("save-materials-btn");
 const downloadResumeBtn = document.getElementById("download-resume-btn");
+const downloadResumeDocxBtn = document.getElementById("download-resume-docx-btn");
 const downloadCoverLetterBtn = document.getElementById("download-cover-letter-btn");
 const openManualApplicationBtn = document.getElementById("open-manual-application-btn");
 
@@ -557,6 +559,7 @@ function showTailorModal(resumeMarkdown, coverLetterText, jobId) {
     tailoredResumeDisplay.value = resumeMarkdown;
     coverLetterDisplay.value = coverLetterText;
     downloadResumeBtn.href = `${API_URL}/api/jobs/${jobId}/materials/resume`;
+    downloadResumeDocxBtn.href = `${API_URL}/api/jobs/${jobId}/materials/resume.docx`;
     downloadCoverLetterBtn.href = `${API_URL}/api/jobs/${jobId}/materials/cover-letter`;
     openManualApplicationBtn.href = `${API_URL}/api/jobs/${jobId}/apply-manually`;
     tailorModal.classList.add("active");
@@ -1400,7 +1403,7 @@ async function testSavedAIProvider() {
     }
 }
 
-// Parse Resume Text Files
+// Parse supported resume documents into editable text
 async function handleResumeUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -1409,6 +1412,7 @@ async function handleResumeUpload(e) {
     
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("allow_ocr", resumeOcrConsent?.checked ? "true" : "false");
     
     try {
         const res = await fetch(`${API_URL}/api/profile/upload-resume`, {
@@ -1423,7 +1427,8 @@ async function handleResumeUpload(e) {
         } else if (result.success) {
             pResume.value = result.resume_text;
             updateBaseResumeActions();
-            logActivity("Resume File Uploaded", `Imported text from ${file.name}. Click 'Save Settings' to save.`, "success");
+            const method = result.ocr_used ? " with selected-provider OCR" : " locally";
+            logActivity("Resume File Imported", `Imported ${String(result.source_format || "resume").toUpperCase()} text from ${file.name}${method}. Click 'Save Settings' to save.`, "success");
         } else {
             alert(result.detail || "Failed to upload resume file.");
         }
@@ -2074,6 +2079,11 @@ async function loadLogs() {
                 resumeLink.download = "";
                 resumeLink.append(createElement("i", "fa-solid fa-file-pdf"), document.createTextNode(" Resume PDF"));
                 fileActions.appendChild(resumeLink);
+                const resumeDocxLink = createElement("a", "btn btn-secondary btn-sm");
+                resumeDocxLink.href = `${API_URL}/api/jobs/${log.job_id}/materials/resume.docx`;
+                resumeDocxLink.download = "";
+                resumeDocxLink.append(createElement("i", "fa-solid fa-file-word"), document.createTextNode(" Accessible DOCX"));
+                fileActions.appendChild(resumeDocxLink);
                 if (log.cover_letter || log.cover_letter_path) {
                     const coverLetterLink = createElement("a", "btn btn-secondary btn-sm");
                     coverLetterLink.href = `${API_URL}/api/jobs/${log.job_id}/materials/cover-letter`;
