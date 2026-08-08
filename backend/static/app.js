@@ -23,6 +23,10 @@ let currentBaseResumeId = null;
 let baseResumeSnapshot = null;
 let selectedBaseResumeVersion = null;
 let applicationInsights = null;
+let interviewPrepJobId = null;
+let interviewPrepSnapshot = "";
+let interviewPrepCompany = "";
+let interviewPrepPosition = "";
 
 // DOM Elements
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -234,6 +238,19 @@ const closeBaseResumeHistoryBtns = [
     document.getElementById("close-base-resume-history-modal"),
     document.getElementById("close-base-resume-history-modal-btn")
 ].filter(Boolean);
+const interviewPrepModal = document.getElementById("interview-prep-modal");
+const interviewPrepBody = document.querySelector("#interview-prep-modal .interview-prep-body");
+const interviewPrepJobLabel = document.getElementById("interview-prep-job-label");
+const interviewPrepContent = document.getElementById("interview-prep-content");
+const interviewPrepSaveStatus = document.getElementById("interview-prep-save-status");
+const interviewPrepCharacterCount = document.getElementById("interview-prep-character-count");
+const generateInterviewPrepBtn = document.getElementById("generate-interview-prep-btn");
+const saveInterviewPrepBtn = document.getElementById("save-interview-prep-btn");
+const downloadInterviewPrepBtn = document.getElementById("download-interview-prep-btn");
+const printInterviewPrepBtn = document.getElementById("print-interview-prep-btn");
+const interviewPrepPrint = document.getElementById("interview-prep-print");
+const interviewPrepPrintTitle = document.getElementById("interview-prep-print-title");
+const interviewPrepPrintContent = document.getElementById("interview-prep-print-content");
 
 // Initialize on Load
 document.addEventListener("DOMContentLoaded", () => {
@@ -272,6 +289,14 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(document.getElementById("cancel-job-import-btn"), "click", hideJobImportModal);
     bindEvent(refreshLogsBtn, "click", loadLogs);
     bindEvent(applicationInsightsDimension, "change", renderApplicationInsights);
+    bindEvent(document.getElementById("close-interview-prep-modal"), "click", requestCloseInterviewPrep);
+    bindEvent(document.getElementById("cancel-interview-prep-btn"), "click", requestCloseInterviewPrep);
+    bindEvent(interviewPrepContent, "input", updateInterviewPrepMeta);
+    bindEvent(generateInterviewPrepBtn, "click", generateInterviewPreparation);
+    bindEvent(saveInterviewPrepBtn, "click", saveInterviewPreparation);
+    bindEvent(downloadInterviewPrepBtn, "click", downloadInterviewPreparation);
+    bindEvent(printInterviewPrepBtn, "click", printInterviewPreparation);
+    window.addEventListener("afterprint", finishInterviewPrepPrint);
     
     // Modal controls
     closeTailorModalBtns.forEach(btn => btn.addEventListener("click", hideTailorModal));
@@ -318,6 +343,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (event.key === "Escape" && baseResumeHistoryModal.classList.contains("active")) {
             hideBaseResumeHistory();
+        }
+        if (event.key === "Escape" && interviewPrepModal.classList.contains("active")) {
+            requestCloseInterviewPrep();
         }
     });
 });
@@ -2308,6 +2336,156 @@ async function saveTailoredMaterials() {
     }
 }
 
+function updateInterviewPrepMeta() {
+    if (!interviewPrepContent) return;
+    const length = interviewPrepContent.value.length;
+    interviewPrepCharacterCount.textContent = `${length.toLocaleString()} / 40,000`;
+    if (interviewPrepJobId && interviewPrepContent.value !== interviewPrepSnapshot) {
+        interviewPrepSaveStatus.textContent = "Unsaved changes";
+    }
+}
+
+async function openInterviewPreparation(jobId) {
+    try {
+        const response = await fetch(`${API_URL}/api/jobs/${jobId}/interview-prep`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not load interview preparation.");
+        interviewPrepJobId = Number(jobId);
+        interviewPrepCompany = String(result.company || "Employer");
+        interviewPrepPosition = String(result.position || "Role");
+        interviewPrepJobLabel.textContent = `${interviewPrepCompany} — ${interviewPrepPosition}`;
+        interviewPrepContent.value = String(result.content || "");
+        interviewPrepSnapshot = interviewPrepContent.value;
+        interviewPrepSaveStatus.textContent = result.has_saved_content
+            ? `Saved locally${result.updated_at ? ` · ${String(result.updated_at).replace("T", " ")}` : ""}`
+            : "Local starter — not yet saved";
+        updateInterviewPrepMeta();
+        interviewPrepModal.classList.add("active");
+        interviewPrepContent.focus();
+        interviewPrepContent.setSelectionRange(0, 0);
+        interviewPrepContent.scrollTop = 0;
+        interviewPrepBody.scrollTop = 0;
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+function requestCloseInterviewPrep() {
+    if (!interviewPrepModal.classList.contains("active")) return;
+    if (interviewPrepContent.value !== interviewPrepSnapshot
+        && !confirm("Close without saving your interview-preparation changes?")) return;
+    interviewPrepModal.classList.remove("active");
+    interviewPrepJobId = null;
+    interviewPrepSnapshot = "";
+}
+
+async function saveInterviewPreparation() {
+    if (!interviewPrepJobId) return;
+    const content = interviewPrepContent.value.trim();
+    if (!content) {
+        alert("Interview preparation cannot be empty.");
+        return;
+    }
+    saveInterviewPrepBtn.disabled = true;
+    interviewPrepSaveStatus.textContent = "Saving locally…";
+    try {
+        const response = await fetch(`${API_URL}/api/jobs/${interviewPrepJobId}/interview-prep`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not save interview preparation.");
+        interviewPrepContent.value = result.content;
+        interviewPrepSnapshot = result.content;
+        interviewPrepSaveStatus.textContent = `Saved locally · ${String(result.updated_at || "").replace("T", " ")}`;
+        updateInterviewPrepMeta();
+        await loadLogs();
+        logActivity("Interview Preparation Saved", "Editable interview notes were saved locally.", "success");
+    } catch (error) {
+        interviewPrepSaveStatus.textContent = "Save failed";
+        alert(error.message);
+    } finally {
+        saveInterviewPrepBtn.disabled = false;
+    }
+}
+
+async function generateInterviewPreparation() {
+    if (!interviewPrepJobId) return;
+    if (interviewPrepContent.value !== interviewPrepSnapshot
+        && !confirm("Generate a new plan and replace the unsaved edits currently shown?")) return;
+    if (!confirm("Generate an interview plan using the selected AI provider and the saved job, match analysis, reviewed tailored-resume text, and application notes?")) return;
+    const operation = showCancellableLoading(
+        "Preparing for the Interview...",
+        "Creating grounded research prompts, likely questions, STAR-story planning, and a practical checklist."
+    );
+    try {
+        const response = await fetch(`${API_URL}/api/jobs/${interviewPrepJobId}/interview-prep/generate`, {
+            method: "POST",
+            headers: operationHeaders(operation)
+        });
+        const result = await response.json();
+        hideLoading();
+        if (!response.ok) throw new Error(result.detail || "Could not generate interview preparation.");
+        if (result.cancelled) {
+            logActivity("Interview Preparation Stopped", result.message, "warning");
+            alert(result.message);
+            return;
+        }
+        interviewPrepContent.value = result.content;
+        interviewPrepSnapshot = result.content;
+        interviewPrepSaveStatus.textContent = `AI-assisted draft saved locally · ${String(result.updated_at || "").replace("T", " ")}`;
+        updateInterviewPrepMeta();
+        await loadLogs();
+        logActivity("Interview Preparation Generated", "A grounded, editable interview plan was saved locally.", "success");
+    } catch (error) {
+        hideLoading();
+        alert(error.message);
+    }
+}
+
+function safeInterviewPrepFilename() {
+    const base = `${interviewPrepCompany} - ${interviewPrepPosition} - interview prep`
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 140);
+    return `${base || "interview-preparation"}.txt`;
+}
+
+function downloadInterviewPreparation() {
+    const content = interviewPrepContent.value.trim();
+    if (!content) return;
+    const url = URL.createObjectURL(new Blob([`${content}\n`], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = safeInterviewPrepFilename();
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function finishInterviewPrepPrint() {
+    document.body.classList.remove("printing-interview-prep");
+    interviewPrepPrint.setAttribute("aria-hidden", "true");
+}
+
+function printInterviewPreparation() {
+    const content = interviewPrepContent.value.trim();
+    if (!content) return;
+    const firstHeading = /^#\s+(.+?)\r?\n+/.exec(content);
+    interviewPrepPrintTitle.textContent = firstHeading
+        ? firstHeading[1]
+        : `Interview Preparation — ${interviewPrepPosition} at ${interviewPrepCompany}`;
+    interviewPrepPrintContent.textContent = firstHeading
+        ? content.slice(firstHeading[0].length).trimStart()
+        : content;
+    interviewPrepPrint.setAttribute("aria-hidden", "false");
+    document.body.classList.add("printing-interview-prep");
+    window.print();
+}
+
 // Load generated materials and manually maintained application history.
 async function loadLogs() {
     try {
@@ -2319,7 +2497,7 @@ async function loadLogs() {
         if (!logs || logs.length === 0) {
             logsTableBody.innerHTML = `
                 <tr>
-                    <td colspan="6" class="table-empty-state">
+                    <td colspan="7" class="table-empty-state">
                         <i class="fa-solid fa-paper-plane"></i>
                         <p>No application materials yet. Tailor a job from the "Search & Match" tab.</p>
                     </td>
@@ -2385,6 +2563,21 @@ async function loadLogs() {
                 fileCell.appendChild(createElement("span", "text-muted", "No generated resume"));
             }
             tr.appendChild(fileCell);
+
+            const prepCell = createElement("td");
+            if (log.job_id) {
+                const prepLabel = log.interview_prep ? "Open Prep" : "Interview Prep";
+                prepCell.appendChild(createActionButton(
+                    prepLabel,
+                    "fa-solid fa-comments",
+                    "btn btn-secondary btn-sm",
+                    () => openInterviewPreparation(log.job_id),
+                    "Open editable interview preparation"
+                ));
+            } else {
+                prepCell.appendChild(createElement("span", "text-muted", "Unavailable"));
+            }
+            tr.appendChild(prepCell);
             
             logsTableBody.appendChild(tr);
         });

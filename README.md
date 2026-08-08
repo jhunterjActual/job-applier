@@ -52,6 +52,11 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Summarizes confirmed applications, employer responses, interviews, offers, rejections, response rates, and recorded response timing directly on the dashboard.
    - Breaks outcomes down by job source, role, location, source resume version, and application method without sending application history to an analytics or AI provider. Percentages from small samples are explicitly presented as directional rather than predictive.
 
+10. **Interview Preparation Workspace**:
+   - Opens a local, editable preparation plan from Application Logs with company-research prompts, likely questions, truthful STAR-story planning, questions for the hiring team, logistics, and follow-up notes.
+   - Provides a useful local starter without an AI call. An explicit **Generate with AI** action can replace it with a grounded draft using the selected provider and saved job/application context, with a Stop action before the generated draft is committed.
+   - Saves reviewed notes locally and supports safely named text downloads and print-friendly output.
+
 ---
 
 ## 🛠️ Architecture

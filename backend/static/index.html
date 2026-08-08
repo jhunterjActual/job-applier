@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-13">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-14">
 </head>
 <body>
     <div class="app-container">
@@ -645,11 +645,12 @@
                                         <th>Headquarters Address</th>
                                         <th>Status</th>
                                         <th>Files</th>
+                                        <th>Preparation</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td colspan="6" class="table-empty-state">
+                                        <td colspan="7" class="table-empty-state">
                                             <i class="fa-solid fa-paper-plane"></i>
                                             <p>No application materials yet. Tailor a job from the "Search &amp; Match" tab.</p>
                                         </td>
@@ -966,6 +967,48 @@
         </div>
     </div>
 
+    <!-- Editable interview preparation workspace -->
+    <div class="modal" id="interview-prep-modal" role="dialog" aria-modal="true" aria-labelledby="interview-prep-title">
+        <div class="modal-content interview-prep-modal-content">
+            <div class="modal-header">
+                <div>
+                    <h2 id="interview-prep-title">Interview Preparation</h2>
+                    <p class="text-muted" id="interview-prep-job-label"></p>
+                </div>
+                <button type="button" class="close-modal-btn" id="close-interview-prep-modal" aria-label="Close interview preparation"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body interview-prep-body">
+                <div class="interview-prep-guidance">
+                    <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+                    <p>The starter template is local. <strong>Generate with AI</strong> sends the saved posting, match analysis, reviewed tailored-resume text, and application notes to your selected AI provider. Verify company facts and use only experience and outcomes you can substantiate.</p>
+                </div>
+                <label for="interview-prep-content" class="sr-only">Editable interview preparation</label>
+                <textarea id="interview-prep-content" class="interview-prep-editor" maxlength="40000" spellcheck="true"></textarea>
+                <div class="interview-prep-meta">
+                    <span id="interview-prep-save-status" role="status" aria-live="polite">Local starter — not yet saved</span>
+                    <span id="interview-prep-character-count">0 / 40,000</span>
+                </div>
+            </div>
+            <div class="modal-footer interview-prep-footer">
+                <button type="button" class="btn btn-secondary" id="generate-interview-prep-btn">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> Generate with AI
+                </button>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="download-interview-prep-btn">
+                        <i class="fa-solid fa-download"></i> Download TXT
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="print-interview-prep-btn">
+                        <i class="fa-solid fa-print"></i> Print
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="cancel-interview-prep-btn">Close</button>
+                    <button type="button" class="btn btn-primary" id="save-interview-prep-btn">
+                        <i class="fa-solid fa-floppy-disk"></i> Save Notes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Base Resume History Modal -->
     <div class="modal" id="base-resume-history-modal" role="dialog" aria-modal="true" aria-labelledby="base-resume-history-title">
         <div class="modal-content">
@@ -995,6 +1038,11 @@
         </div>
     </div>
 
+    <section id="interview-prep-print" aria-hidden="true">
+        <h1 id="interview-prep-print-title">Interview Preparation</h1>
+        <pre id="interview-prep-print-content"></pre>
+    </section>
+
     <!-- Loading / Applying Modal -->
     <div class="modal modal-sm" id="loading-modal" role="dialog" aria-modal="true" aria-labelledby="loading-title" aria-describedby="loading-subtitle">
         <div class="modal-content text-center">
@@ -1012,6 +1060,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-13"></script>
+    <script src="/static/app.js?v=20260808-14"></script>
 </body>
 </html>
