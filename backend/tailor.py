@@ -1,10 +1,16 @@
 import json
 import re
 from datetime import date
-from google import genai
-from google.genai import types
 from pydantic import BaseModel, Field
-from config import get_gemini_api_key
+import config
+from ai_providers import (
+    AIProviderError,
+    AIProviderSettings,
+    default_model,
+    generate_structured,
+    normalize_provider,
+    provider_label,
+)
 from operations import OperationCancelled
 from typing import Callable
 
@@ -29,20 +35,6 @@ class BatchMatchResponse(BaseModel):
     matches: list[BatchJobMatch]
 
 
-def _structured_response_data(response, schema: type[BaseModel]) -> dict:
-    """Prefer SDK-validated structured output over reparsing model text."""
-    parsed = getattr(response, "parsed", None)
-    if isinstance(parsed, schema):
-        return parsed.model_dump()
-    if parsed is not None:
-        return schema.model_validate(parsed).model_dump()
-
-    response_text = (getattr(response, "text", None) or "").strip()
-    if not response_text:
-        raise ValueError("Gemini returned an empty structured response.")
-    return schema.model_validate_json(response_text).model_dump()
-
-
 def format_cover_letter_date(value: date) -> str:
     """Format dates without platform-specific strftime day directives."""
     return f"{value.strftime('%B')} {value.day}, {value.year}"
@@ -52,7 +44,7 @@ def finalize_cover_letter(cover_letter: str, letter_date: date | None = None) ->
     """Resolve date tokens so unfinished template text is never delivered."""
     text = (cover_letter or "").strip()
     if not text:
-        raise ValueError("Gemini returned an empty cover letter.")
+        raise ValueError("The AI provider returned an empty cover letter.")
 
     concrete_date = format_cover_letter_date(letter_date or date.today())
     text = re.sub(r"(?i)\[\s*date\s*\]", concrete_date, text)
@@ -62,21 +54,12 @@ def finalize_cover_letter(cover_letter: str, letter_date: date | None = None) ->
         raise ValueError("The generated cover letter contains an unresolved date placeholder.")
     return text
 
-def get_client(api_key: str = None) -> genai.Client:
-    """
-    Initializes and returns a Google GenAI client using the provided API key
-    or falling back to the configured default API key.
-    
-    Args:
-        api_key (str, optional): The Gemini API key. Defaults to None.
-        
-    Raises:
-        ValueError: If no Gemini API key is configured.
-    """
-    key = api_key or get_gemini_api_key()
+def _provider_settings(api_key: str | None, ai_provider: str, ai_model: str | None) -> AIProviderSettings:
+    provider = normalize_provider(ai_provider)
+    key = (api_key or "").strip()
     if not key:
-        raise ValueError("Gemini API key is not configured. Please set GEMINI_API_KEY environment variable or enter it in settings.")
-    return genai.Client(api_key=key)
+        key = config.get_openai_api_key() if provider == "openai" else config.get_gemini_api_key()
+    return AIProviderSettings(provider, (ai_model or default_model(provider)).strip(), key)
 
 RESUME_MODE_GUIDANCE = {
     "it": "Emphasize technical depth, architecture, delivery outcomes, platforms, and relevant tools without keyword stuffing.",
@@ -165,27 +148,25 @@ def tailor_resume_and_cover_letter(
     api_key: str = None,
     resume_mode: str = "general_professional",
     cancel_check: Callable[[], None] | None = None,
+    ai_provider: str = "gemini",
+    ai_model: str | None = None,
 ) -> dict:
     """
-    Consolidates resume tailoring and cover letter drafting into a single Gemini request
-    to conserve daily API limits, returning the customized materials as JSON.
+    Consolidates resume tailoring and cover letter drafting into one structured AI request.
     
     Args:
         base_resume_text (str): The candidate's raw base resume.
         job_title (str): The target job title.
         company_name (str): The name of the hiring company.
         job_description (str): The description/requirements of the job.
-        api_key (str, optional): The Gemini API key.
+        api_key (str, optional): The selected provider's API key.
         
     Returns:
         dict: A dictionary containing success status, tailored resume, and cover letter text.
     """
     if cancel_check:
         cancel_check()
-    try:
-        client = get_client(api_key)
-    except Exception as e:
-        return {"error": str(e)}
+    settings = _provider_settings(api_key, ai_provider, ai_model)
 
     letter_date = date.today()
     formatted_letter_date = format_cover_letter_date(letter_date)
@@ -193,8 +174,7 @@ def tailor_resume_and_cover_letter(
     section_template = RESUME_SECTION_TEMPLATES.get(resume_mode, RESUME_SECTION_TEMPLATES["general_professional"])
     page_contract = "The academic CV may exceed two pages when the evidenced content requires it." if resume_mode == "academic_cv" else "The resume must fit within two US Letter pages at 10-point type."
 
-    # Combine resume tailoring and cover letter writing into a single prompt
-    # and use JSON output to reduce daily Gemini API requests from 2 to 1.
+    # Combine resume tailoring and cover letter writing into a single prompt.
     prompt = f"""
     You are an expert resume writer and career coach for both technical and non-technical professions. Your task is to perform two actions for a candidate applying to a job:
     1. Tailor their base resume to match the job requirements, emphasizing only relevant, evidenced skills, projects, and work experience. Maintain absolute factual accuracy: DO NOT invent jobs, dates, degrees, credentials, technologies, metrics, or companies.
@@ -230,19 +210,9 @@ def tailor_resume_and_cover_letter(
     try:
         if cancel_check:
             cancel_check()
-        # Use gemini-2.5-flash for speed and efficiency
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=TailoringResponse,
-            )
-        )
+        res_data = generate_structured(settings, prompt, TailoringResponse)
         if cancel_check:
             cancel_check()
-        
-        res_data = _structured_response_data(response, TailoringResponse)
         tailored_resume = res_data.get("tailored_resume", "").strip()
         cover_letter = finalize_cover_letter(res_data.get("cover_letter", ""), letter_date)
 
@@ -263,10 +233,12 @@ def tailor_resume_and_cover_letter(
         }
     except OperationCancelled:
         raise
+    except AIProviderError as e:
+        return {"success": False, "error": str(e)}
     except Exception as e:
         return {
             "success": False,
-            "error": f"Failed to call Gemini API: {str(e)}"
+            "error": f"Tailoring failed after the {provider_label(settings.provider)} response: {str(e)}"
         }
 
 def analyze_job_match(
@@ -276,6 +248,8 @@ def analyze_job_match(
     job_description: str,
     api_key: str = None,
     cancel_check: Callable[[], None] | None = None,
+    ai_provider: str = "gemini",
+    ai_model: str | None = None,
 ) -> dict:
     """
     Analyzes how well the candidate's resume matches a single job description
@@ -286,17 +260,14 @@ def analyze_job_match(
         job_title (str): The target job title.
         company_name (str): The name of the hiring company.
         job_description (str): The description/requirements of the job.
-        api_key (str, optional): The Gemini API key.
+        api_key (str, optional): The selected provider's API key.
         
     Returns:
         dict: A dictionary containing success status, match score, and analysis markdown.
     """
     if cancel_check:
         cancel_check()
-    try:
-        client = get_client(api_key)
-    except Exception as e:
-        return {"error": str(e)}
+    settings = _provider_settings(api_key, ai_provider, ai_model)
 
     prompt = f"""
     You are an AI Job Matching Assistant. Analyze the match between the candidate's resume and a job description.
@@ -323,17 +294,9 @@ def analyze_job_match(
     try:
         if cancel_check:
             cancel_check()
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=JobMatchResponse,
-            ),
-        )
+        data = generate_structured(settings, prompt, JobMatchResponse)
         if cancel_check:
             cancel_check()
-        data = _structured_response_data(response, JobMatchResponse)
         return {
             "success": True,
             "match_score": data.get("match_score", 50),
@@ -341,13 +304,21 @@ def analyze_job_match(
         }
     except OperationCancelled:
         raise
+    except AIProviderError as e:
+        return {"success": False, "error": str(e)}
     except Exception as e:
         return {
             "success": False,
-            "error": f"Failed to analyze match: {str(e)}"
+            "error": f"Failed to analyze the match with {provider_label(settings.provider)}: {str(e)}"
         }
 
-def analyze_job_matches_batch(base_resume_text: str, jobs_list: list, api_key: str = None) -> dict:
+def analyze_job_matches_batch(
+    base_resume_text: str,
+    jobs_list: list,
+    api_key: str = None,
+    ai_provider: str = "gemini",
+    ai_model: str | None = None,
+) -> dict:
     """
     Analyzes multiple job postings in a single API call to conserve free-tier
     request quotas and evaluate job compatibility in bulk.
@@ -355,15 +326,12 @@ def analyze_job_matches_batch(base_resume_text: str, jobs_list: list, api_key: s
     Args:
         base_resume_text (str): The candidate's raw base resume.
         jobs_list (list): A list of dictionaries representing discovered jobs to match.
-        api_key (str, optional): The Gemini API key.
+        api_key (str, optional): The selected provider's API key.
         
     Returns:
         dict: A dictionary containing success status and a list of structured match results.
     """
-    try:
-        client = get_client(api_key)
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    settings = _provider_settings(api_key, ai_provider, ai_model)
         
     # Format the jobs list compactly to save tokens
     formatted_jobs = []
@@ -392,22 +360,15 @@ def analyze_job_matches_batch(base_resume_text: str, jobs_list: list, api_key: s
     """
     
     try:
-        # Use gemini-2.5-flash for speed
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=BatchMatchResponse,
-            ),
-        )
-        data = _structured_response_data(response, BatchMatchResponse)
+        data = generate_structured(settings, prompt, BatchMatchResponse)
         return {
             "success": True,
             "matches": data.get("matches", [])
         }
+    except AIProviderError as e:
+        return {"success": False, "error": str(e)}
     except Exception as e:
         return {
             "success": False,
-            "error": f"Failed to analyze matches in batch: {str(e)}"
+            "error": f"Failed to analyze matches with {provider_label(settings.provider)}: {str(e)}"
         }

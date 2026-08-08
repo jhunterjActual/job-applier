@@ -39,6 +39,9 @@ def init_db() -> None:
         website TEXT,
         base_resume_text TEXT,
         gemini_api_key TEXT,
+        openai_api_key TEXT DEFAULT '',
+        ai_provider TEXT NOT NULL DEFAULT 'gemini',
+        ai_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash',
         prefer_us_headquarters INTEGER NOT NULL DEFAULT 1
     )
     """)
@@ -155,6 +158,9 @@ def init_db() -> None:
     # Check and add suggested_keywords column if it doesn't exist
     _add_column_if_missing(cursor, "profile", "suggested_keywords", "TEXT DEFAULT ''")
     _add_column_if_missing(cursor, "profile", "google_maps_api_key", "TEXT DEFAULT ''")
+    _add_column_if_missing(cursor, "profile", "openai_api_key", "TEXT DEFAULT ''")
+    _add_column_if_missing(cursor, "profile", "ai_provider", "TEXT NOT NULL DEFAULT 'gemini'")
+    _add_column_if_missing(cursor, "profile", "ai_model", "TEXT NOT NULL DEFAULT 'gemini-2.5-flash'")
     _add_column_if_missing(cursor, "profile", "resume_mode", "TEXT DEFAULT 'general_professional'")
     _add_column_if_missing(cursor, "profile", "prefer_us_headquarters", "INTEGER NOT NULL DEFAULT 1")
     _add_column_if_missing(cursor, "jobs", "archived_at", "TEXT")
@@ -220,8 +226,12 @@ def init_db() -> None:
     cursor.execute("SELECT COUNT(*) FROM profile")
     if cursor.fetchone()[0] == 0:
         cursor.execute("""
-        INSERT INTO profile (name, email, phone, github, linkedin, website, base_resume_text, gemini_api_key, suggested_keywords, google_maps_api_key)
-        VALUES ('', '', '', '', '', '', '', '', '', '')
+        INSERT INTO profile (
+            name, email, phone, github, linkedin, website, base_resume_text,
+            gemini_api_key, openai_api_key, ai_provider, ai_model,
+            suggested_keywords, google_maps_api_key
+        )
+        VALUES ('', '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', '', '')
         """)
     # Clean up any previously stored junk/closed postings
     cursor.execute("""

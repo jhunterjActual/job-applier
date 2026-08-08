@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-4">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-5">
 </head>
 <body>
     <div class="app-container">
@@ -52,7 +52,7 @@
             <div class="api-key-badge-container">
                 <div class="api-key-badge" id="api-status">
                     <span class="status-indicator yellow"></span>
-                    <span class="status-text">Checking Gemini API Key...</span>
+                    <span class="status-text">Checking AI Provider...</span>
                 </div>
             </div>
         </aside>
@@ -172,16 +172,46 @@
                                     </select>
                                 </div>
                                 <div class="form-group full-width">
-                                    <label for="p-apikey">Gemini API Key</label>
+                                    <label for="p-ai-provider">AI provider</label>
+                                    <select id="p-ai-provider">
+                                        <option value="gemini">Google Gemini</option>
+                                        <option value="openai">OpenAI</option>
+                                    </select>
+                                    <small class="form-help">Matching, keyword suggestions, and material tailoring use the selected provider.</small>
+                                </div>
+                                <div class="form-group full-width">
+                                    <label for="p-ai-model">AI model</label>
+                                    <input type="text" id="p-ai-model" list="ai-model-suggestions" maxlength="120" autocomplete="off" spellcheck="false" required pattern="[A-Za-z0-9._:/-]+" placeholder="gemini-2.5-flash">
+                                    <datalist id="ai-model-suggestions">
+                                        <option value="gemini-2.5-flash"></option>
+                                        <option value="gpt-5-mini"></option>
+                                    </datalist>
+                                    <small class="form-help">Use a model available to your key that supports structured JSON output.</small>
+                                </div>
+                                <div class="form-group full-width">
+                                    <label for="p-apikey">Google Gemini API Key</label>
                                     <div class="password-input-container">
-                                        <input type="password" id="p-apikey" placeholder="Enter API Key (AI-xxxx...)" aria-describedby="p-gemini-key-status p-gemini-key-help">
-                                        <button type="button" class="toggle-password" id="toggle-api-visibility">
+                                        <input type="password" id="p-apikey" autocomplete="off" placeholder="Enter Gemini API key" aria-describedby="p-gemini-key-status p-gemini-key-help">
+                                        <button type="button" class="toggle-password" id="toggle-api-visibility" aria-label="Show or hide Gemini API key">
                                             <i class="fa-solid fa-eye"></i>
                                         </button>
                                     </div>
                                     <div class="secret-key-meta">
                                         <span class="secret-key-status checking" id="p-gemini-key-status" role="status" aria-live="polite">Checking saved status…</span>
                                         <small class="form-help" id="p-gemini-key-help">Your API key is stored locally on your machine.</small>
+                                    </div>
+                                </div>
+                                <div class="form-group full-width">
+                                    <label for="p-openai-apikey">OpenAI API Key</label>
+                                    <div class="password-input-container">
+                                        <input type="password" id="p-openai-apikey" autocomplete="off" placeholder="Enter OpenAI API key" aria-describedby="p-openai-key-status p-openai-key-help">
+                                        <button type="button" class="toggle-password" id="toggle-openai-api-visibility" aria-label="Show or hide OpenAI API key">
+                                            <i class="fa-solid fa-eye"></i>
+                                        </button>
+                                    </div>
+                                    <div class="secret-key-meta">
+                                        <span class="secret-key-status checking" id="p-openai-key-status" role="status" aria-live="polite">Checking saved status…</span>
+                                        <small class="form-help" id="p-openai-key-help">Your API key is stored locally on your machine.</small>
                                     </div>
                                 </div>
                                 <div class="form-group full-width">
@@ -205,10 +235,14 @@
                                     <small class="form-help">Useful when documenting U.S. unemployment work-search activity. Unverified addresses are shown as Unknown.</small>
                                 </div>
                                 <div class="form-actions full-width">
+                                    <button type="button" class="btn btn-secondary" id="test-ai-provider-btn" disabled>
+                                        <i class="fa-solid fa-plug-circle-check"></i> Test Saved AI Provider
+                                    </button>
                                     <button type="submit" class="btn btn-primary" id="save-profile-btn">
                                         <i class="fa-solid fa-floppy-disk"></i> Save Settings
                                     </button>
                                 </div>
+                                <p class="form-help full-width provider-test-status" id="ai-provider-test-status" role="status" aria-live="polite">Save provider, model, and key changes before testing.</p>
                             </form>
                         </div>
                     </div>
@@ -711,6 +745,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-4"></script>
+    <script src="/static/app.js?v=20260808-5"></script>
 </body>
 </html>

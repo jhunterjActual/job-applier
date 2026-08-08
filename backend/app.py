@@ -12,6 +12,14 @@ from typing import Literal, Optional
 from datetime import date, datetime, timedelta
 
 import config
+from ai_providers import (
+    AIProviderError,
+    default_model,
+    normalize_provider,
+    provider_key_configured,
+    settings_from_profile,
+    validate_provider_capability,
+)
 from database import get_db_connection
 from tailor import analyze_job_match, apply_resume_section_template, finalize_cover_letter, tailor_resume_and_cover_letter
 from searcher import (
@@ -44,7 +52,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.5"
+APP_BUILD = "20260808.6"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -127,12 +135,15 @@ class ProfileUpdate(BaseModel):
     website: str
     base_resume_text: str
     resume_mode: Literal["it", "technical_executive", "general_professional", "federal", "healthcare", "education", "sales", "trades_operations", "academic_cv", "cover_letter"] = "general_professional"
+    ai_provider: Literal["gemini", "openai"] = "gemini"
+    ai_model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._:/-]+$")
     prefer_us_headquarters: bool = True
 
 
 class ProfileSecretsUpdate(BaseModel):
-    gemini_api_key: Optional[str] = None
-    google_maps_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = Field(default=None, max_length=512)
+    openai_api_key: Optional[str] = Field(default=None, max_length=512)
+    google_maps_api_key: Optional[str] = Field(default=None, max_length=512)
 
 class SearchRequest(BaseModel):
     keywords: str
@@ -194,8 +205,13 @@ def get_profile() -> dict:
     conn.close()
     if row:
         result = dict(row)
-        result["gemini_api_key_configured"] = bool(result.pop("gemini_api_key", ""))
+        result["gemini_api_key_configured"] = provider_key_configured(row, "gemini")
+        result["openai_api_key_configured"] = provider_key_configured(row, "openai")
+        result.pop("gemini_api_key", None)
+        result.pop("openai_api_key", None)
         result["google_maps_api_key_configured"] = bool(result.pop("google_maps_api_key", ""))
+        result["ai_provider"] = normalize_provider(result.get("ai_provider"))
+        result["ai_model"] = str(result.get("ai_model") or default_model(result["ai_provider"]))
         return result
     return {}
 
@@ -214,9 +230,14 @@ def update_profile(profile: ProfileUpdate) -> dict:
     conn.execute("""
     UPDATE profile
     SET name = ?, email = ?, phone = ?, github = ?, linkedin = ?, website = ?,
-        base_resume_text = ?, resume_mode = ?, prefer_us_headquarters = ?, suggested_keywords = ''
+        base_resume_text = ?, resume_mode = ?, ai_provider = ?, ai_model = ?,
+        prefer_us_headquarters = ?, suggested_keywords = ''
     WHERE id = 1
-    """, (profile.name, profile.email, profile.phone, profile.github, profile.linkedin, profile.website, profile.base_resume_text, profile.resume_mode, int(profile.prefer_us_headquarters)))
+    """, (
+        profile.name, profile.email, profile.phone, profile.github, profile.linkedin,
+        profile.website, profile.base_resume_text, profile.resume_mode,
+        profile.ai_provider, profile.ai_model, int(profile.prefer_us_headquarters),
+    ))
     conn.commit()
     conn.close()
     
@@ -231,6 +252,9 @@ def update_profile_secrets(secrets: ProfileSecretsUpdate) -> dict:
     if secrets.gemini_api_key is not None:
         updates.append("gemini_api_key = ?")
         values.append(secrets.gemini_api_key.strip())
+    if secrets.openai_api_key is not None:
+        updates.append("openai_api_key = ?")
+        values.append(secrets.openai_api_key.strip())
     if secrets.google_maps_api_key is not None:
         updates.append("google_maps_api_key = ?")
         values.append(secrets.google_maps_api_key.strip())
@@ -243,19 +267,44 @@ def update_profile_secrets(secrets: ProfileSecretsUpdate) -> dict:
     if secrets.gemini_api_key is not None:
         config.GEMINI_API_KEY = secrets.gemini_api_key.strip()
         os.environ["GEMINI_API_KEY"] = config.GEMINI_API_KEY
+    if secrets.openai_api_key is not None:
+        config.OPENAI_API_KEY = secrets.openai_api_key.strip()
+        os.environ["OPENAI_API_KEY"] = config.OPENAI_API_KEY
     if secrets.google_maps_api_key is not None:
         config.GOOGLE_MAPS_API_KEY = secrets.google_maps_api_key.strip()
         os.environ["GOOGLE_MAPS_API_KEY"] = config.GOOGLE_MAPS_API_KEY
     conn = get_db_connection()
-    configured = conn.execute(
-        "SELECT gemini_api_key, google_maps_api_key FROM profile WHERE id = 1"
-    ).fetchone()
+    configured = conn.execute("SELECT * FROM profile WHERE id = 1").fetchone()
     conn.close()
     return {
         "success": True,
-        "gemini_api_key_configured": bool(configured["gemini_api_key"]),
+        "gemini_api_key_configured": provider_key_configured(configured, "gemini"),
+        "openai_api_key_configured": provider_key_configured(configured, "openai"),
         "google_maps_api_key_configured": bool(configured["google_maps_api_key"]),
     }
+
+
+@app.post("/api/profile/ai-provider/validate")
+def validate_ai_provider(
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
+    """Validate the selected provider's stored key, model, and structured output."""
+    with operation_scope(operation_id) as operation:
+        try:
+            operation.checkpoint()
+            conn = get_db_connection()
+            try:
+                profile = conn.execute("SELECT * FROM profile WHERE id = 1").fetchone()
+            finally:
+                conn.close()
+            settings = settings_from_profile(profile)
+            result = validate_provider_capability(settings)
+            operation.checkpoint()
+            return result
+        except OperationCancelled:
+            return {"success": False, "cancelled": True, "message": "AI provider test stopped."}
+        except AIProviderError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 @app.post("/api/profile/upload-resume")
 async def upload_resume(
@@ -567,9 +616,7 @@ def _save_manual_job(req: ManualJobSaveRequest, operation: OperationToken) -> di
 
     conn = get_db_connection()
     try:
-        profile = conn.execute(
-            "SELECT base_resume_text, gemini_api_key FROM profile LIMIT 1"
-        ).fetchone()
+        profile = conn.execute("SELECT * FROM profile LIMIT 1").fetchone()
         operation.checkpoint()
 
         # Save the reviewed posting first so a later Stop request can preserve
@@ -617,16 +664,20 @@ def _save_manual_job(req: ManualJobSaveRequest, operation: OperationToken) -> di
     finally:
         conn.close()
 
+    match_error = None
     try:
         operation.checkpoint()
-        if profile and profile["base_resume_text"] and profile["gemini_api_key"]:
+        ai_settings = settings_from_profile(profile)
+        if profile and profile["base_resume_text"] and ai_settings.api_key:
             match = analyze_job_match(
                 profile["base_resume_text"],
                 title,
                 company,
                 description,
-                profile["gemini_api_key"],
+                ai_settings.api_key,
                 cancel_check=operation.checkpoint,
+                ai_provider=ai_settings.provider,
+                ai_model=ai_settings.model,
             )
             operation.checkpoint()
             if match.get("success"):
@@ -641,6 +692,8 @@ def _save_manual_job(req: ManualJobSaveRequest, operation: OperationToken) -> di
                     conn.commit()
                 finally:
                     conn.close()
+            else:
+                match_error = match.get("error") or "Match analysis was unavailable."
     except OperationCancelled:
         return {
             "success": True,
@@ -657,10 +710,15 @@ def _save_manual_job(req: ManualJobSaveRequest, operation: OperationToken) -> di
         "success": True,
         "job_id": job_id,
         "match_score": match_score,
+        "match_error": match_error,
         "message": (
             "Job imported and match analysis completed."
             if match_score is not None else
-            "Job imported. Match analysis was unavailable, so it is shown as unscored."
+            (
+                f"Job imported. {match_error} It is shown as unscored."
+                if match_error else
+                "Job imported. Match analysis was unavailable, so it is shown as unscored."
+            )
         ),
     }
 
@@ -1114,7 +1172,7 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     operation.checkpoint()
     conn = get_db_connection()
     job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
-    profile = conn.execute("SELECT base_resume_text, gemini_api_key, google_maps_api_key, resume_mode, prefer_us_headquarters FROM profile LIMIT 1").fetchone()
+    profile = conn.execute("SELECT * FROM profile LIMIT 1").fetchone()
     
     if not job:
         conn.close()
@@ -1125,16 +1183,18 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
         
     conn.close()
     
-    api_key = profile["gemini_api_key"]
+    ai_settings = settings_from_profile(profile)
     google_key = profile["google_maps_api_key"]
     res = tailor_resume_and_cover_letter(
         base_resume_text=profile["base_resume_text"],
         job_title=job["title"],
         company_name=job["company"],
         job_description=job["description"],
-        api_key=api_key,
+        api_key=ai_settings.api_key,
         resume_mode=profile["resume_mode"] or "general_professional",
         cancel_check=operation.checkpoint,
+        ai_provider=ai_settings.provider,
+        ai_model=ai_settings.model,
     )
     operation.checkpoint()
     if not res.get("success"):
@@ -1182,7 +1242,7 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     # Find headquarters
     hq = find_us_headquarters(
         job["company"],
-        api_key,
+        profile["gemini_api_key"] or config.get_gemini_api_key(),
         google_key,
         prefer_us=bool(profile["prefer_us_headquarters"]),
         job_location=job["location"] or "",
