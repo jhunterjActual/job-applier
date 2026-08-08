@@ -1,8 +1,10 @@
 import os
+import tempfile
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlsplit
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -25,7 +27,15 @@ from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import is_job_suppressed, record_job_suppression
 from source_diagnostics import list_source_diagnostics, persist_source_diagnostics
-from materials import material_download_name, persist_cover_letter, resolve_output_file
+from materials import cover_letter_output_path, material_download_name, persist_cover_letter, resolve_output_file
+from operations import (
+    OperationCancelled,
+    OperationToken,
+    finish_operation,
+    operation_scope,
+    request_cancellation,
+    start_operation,
+)
 from analytics import (
     capture_event,
     duration_bucket,
@@ -34,7 +44,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.4"
+APP_BUILD = "20260808.5"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -248,7 +258,10 @@ def update_profile_secrets(secrets: ProfileSecretsUpdate) -> dict:
     }
 
 @app.post("/api/profile/upload-resume")
-async def upload_resume(file: UploadFile = File(...)) -> dict:
+async def upload_resume(
+    file: UploadFile = File(...),
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
     """
     Handle uploading a base resume in text or markdown format, extract its text content,
     and save it to the profile settings table.
@@ -262,9 +275,11 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
     if not (file.filename or "").lower().endswith(('.txt', '.md')):
         raise HTTPException(status_code=400, detail="Only .txt and .md text files are supported for resume upload.")
 
+    operation = start_operation(operation_id)
     try:
         content = bytearray()
         while chunk := await file.read(64 * 1024):
+            operation.checkpoint()
             content.extend(chunk)
             if len(content) > MAX_RESUME_UPLOAD_BYTES:
                 raise HTTPException(
@@ -276,7 +291,9 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
         except UnicodeDecodeError as exc:
             raise HTTPException(status_code=400, detail="Resume files must use UTF-8 text encoding.") from exc
 
-        # Save to database
+        operation.checkpoint()
+        # This short database update is the commit boundary. Once it begins,
+        # it completes atomically and is not presented as cancellable.
         conn = get_db_connection()
         try:
             conn.execute("UPDATE profile SET base_resume_text = ?, suggested_keywords = '' WHERE id = 1", (resume_text,))
@@ -285,11 +302,14 @@ async def upload_resume(file: UploadFile = File(...)) -> dict:
             conn.close()
 
         return {"success": True, "resume_text": resume_text}
+    except OperationCancelled:
+        return {"success": False, "cancelled": True, "message": "Resume import stopped before profile data changed."}
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Failed to read the resume file.") from exc
     finally:
+        finish_operation(operation)
         await file.close()
 
 IS_SEARCHING = False
@@ -322,7 +342,11 @@ def _save_source_diagnostic_history(search_result: dict) -> None:
                 pass
 
 
-def run_search_wrapper(keywords: str, location: str) -> None:
+def run_search_wrapper(
+    keywords: str,
+    location: str,
+    operation: Optional[OperationToken] = None,
+) -> None:
     """
     A background helper task that triggers the crawling and matching of jobs,
     ensuring that the searching status flag is reset once completed.
@@ -331,15 +355,40 @@ def run_search_wrapper(keywords: str, location: str) -> None:
         keywords (str): Semi-colon or space-separated job keywords.
         location (str): Semicolon-separated target locations.
     """
+    operation = operation or start_operation()
     global IS_SEARCHING, LAST_SEARCH_RESULT
     try:
-        LAST_SEARCH_RESULT = run_job_search_and_matching(keywords, location)
+        LAST_SEARCH_RESULT = run_job_search_and_matching(keywords, location, operation.checkpoint)
         if isinstance(LAST_SEARCH_RESULT, dict) and LAST_SEARCH_RESULT.get("provider_alerts"):
             _save_source_diagnostic_history(LAST_SEARCH_RESULT)
+    except OperationCancelled:
+        LAST_SEARCH_RESULT = {
+            "success": True,
+            "cancelled": True,
+            "partial": True,
+            "message": "Search stopped. Any jobs committed before the stop request were kept.",
+            "provider_alerts": [],
+        }
     except Exception as exc:
         LAST_SEARCH_RESULT = {"success": False, "error": str(exc), "provider_alerts": []}
     finally:
+        finish_operation(operation)
         IS_SEARCHING = False
+
+
+@app.post("/api/operations/{operation_id}/cancel")
+def cancel_operation(operation_id: str) -> dict:
+    """Request cooperative cancellation at the operation's next safe checkpoint."""
+    active = request_cancellation(operation_id)
+    return {
+        "success": True,
+        "active": active,
+        "message": (
+            "Stopping safely after the current step."
+            if active else
+            "The operation has already finished."
+        ),
+    }
 
 # Job listings endpoints
 @app.get("/api/jobs")
@@ -366,8 +415,24 @@ def get_jobs(include_archived: bool = False) -> list[dict]:
 
 
 @app.post("/api/jobs/import/preview")
-def preview_manual_job(req: ManualJobPreviewRequest) -> dict:
+def preview_manual_job(
+    req: ManualJobPreviewRequest,
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
     """Validate a public posting URL and extract editable details without saving it."""
+    with operation_scope(operation_id) as operation:
+        try:
+            return _preview_manual_job(req, operation)
+        except OperationCancelled:
+            return {
+                "success": False,
+                "cancelled": True,
+                "message": "Preview stopped before any job data changed.",
+            }
+
+
+def _preview_manual_job(req: ManualJobPreviewRequest, operation: OperationToken) -> dict:
+    operation.checkpoint()
     canonical_url = canonicalize_job_url(req.url)
     is_public, reason = validate_public_http_url(canonical_url)
     if not is_public:
@@ -396,7 +461,12 @@ def preview_manual_job(req: ManualJobPreviewRequest) -> dict:
             "job": {"url": canonical_url},
         }
 
-    outcome = inspect_job_posting(canonical_url, allow_partial=True)
+    outcome = inspect_job_posting(
+        canonical_url,
+        allow_partial=True,
+        cancel_check=operation.checkpoint,
+    )
+    operation.checkpoint()
     details = outcome["details"]
     resolved_url = canonicalize_job_url(details.get("url") or canonical_url)
     if resolved_url != canonical_url:
@@ -458,8 +528,25 @@ def preview_manual_job(req: ManualJobPreviewRequest) -> dict:
 
 
 @app.post("/api/jobs/import")
-def save_manual_job(req: ManualJobSaveRequest) -> dict:
+def save_manual_job(
+    req: ManualJobSaveRequest,
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
     """Save one reviewed posting and score it when the configured AI is available."""
+    with operation_scope(operation_id) as operation:
+        try:
+            return _save_manual_job(req, operation)
+        except OperationCancelled:
+            return {
+                "success": False,
+                "cancelled": True,
+                "saved": False,
+                "message": "Job import stopped before the posting was saved.",
+            }
+
+
+def _save_manual_job(req: ManualJobSaveRequest, operation: OperationToken) -> dict:
+    operation.checkpoint()
     canonical_url = canonicalize_job_url(req.url)
     is_public, reason = validate_public_http_url(canonical_url)
     if not is_public:
@@ -483,22 +570,11 @@ def save_manual_job(req: ManualJobSaveRequest) -> dict:
         profile = conn.execute(
             "SELECT base_resume_text, gemini_api_key FROM profile LIMIT 1"
         ).fetchone()
-        match_score = None
-        match_analysis = "Manual import saved without AI match analysis."
-        if profile and profile["base_resume_text"] and profile["gemini_api_key"]:
-            try:
-                match = analyze_job_match(
-                    profile["base_resume_text"], title, company, description, profile["gemini_api_key"]
-                )
-                if match.get("success"):
-                    match_score = max(0, min(100, int(match["match_score"])))
-                    match_analysis = str(match.get("match_analysis") or "Matched successfully.")
-            except (AttributeError, KeyError, TypeError, ValueError):
-                match_score = None
+        operation.checkpoint()
 
-        # AI analysis may make a network call, so do it before taking the write
-        # lock. The duplicate check stays inside the transaction to close the
-        # race between concurrent imports of the same canonical URL.
+        # Save the reviewed posting first so a later Stop request can preserve
+        # it as explicitly unscored. The duplicate check and insert remain one
+        # short atomic transaction.
         conn.execute("BEGIN IMMEDIATE")
         if is_job_suppressed(conn, canonical_url):
             conn.rollback()
@@ -518,6 +594,8 @@ def save_manual_job(req: ManualJobSaveRequest) -> dict:
             )
 
         now = datetime.now().isoformat(timespec="seconds")
+        match_score = None
+        match_analysis = "Manual import saved; match analysis has not been completed."
         cursor = conn.execute("""
             INSERT INTO jobs (
                 title, company, description, url, match_score, match_analysis,
@@ -538,6 +616,42 @@ def save_manual_job(req: ManualJobSaveRequest) -> dict:
         raise
     finally:
         conn.close()
+
+    try:
+        operation.checkpoint()
+        if profile and profile["base_resume_text"] and profile["gemini_api_key"]:
+            match = analyze_job_match(
+                profile["base_resume_text"],
+                title,
+                company,
+                description,
+                profile["gemini_api_key"],
+                cancel_check=operation.checkpoint,
+            )
+            operation.checkpoint()
+            if match.get("success"):
+                match_score = max(0, min(100, int(match["match_score"])))
+                match_analysis = str(match.get("match_analysis") or "Matched successfully.")
+                conn = get_db_connection()
+                try:
+                    conn.execute(
+                        "UPDATE jobs SET match_score = ?, match_analysis = ? WHERE id = ?",
+                        (match_score, match_analysis, job_id),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+    except OperationCancelled:
+        return {
+            "success": True,
+            "cancelled": True,
+            "saved": True,
+            "job_id": job_id,
+            "match_score": None,
+            "message": "Job saved. Match analysis was stopped, so the posting is shown as unscored.",
+        }
+    except (AttributeError, KeyError, TypeError, ValueError):
+        match_score = None
 
     return {
         "success": True,
@@ -838,8 +952,24 @@ def delete_saved_search(search_id: int) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/verify")
-def verify_job_posting(job_id: int) -> dict:
+def verify_job_posting(
+    job_id: int,
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
     """Re-scrape one listing and mark it expired without deleting history."""
+    with operation_scope(operation_id) as operation:
+        try:
+            return _verify_job_posting(job_id, operation)
+        except OperationCancelled:
+            return {
+                "success": False,
+                "cancelled": True,
+                "message": "Listing verification stopped. The saved job was not changed.",
+            }
+
+
+def _verify_job_posting(job_id: int, operation: OperationToken) -> dict:
+    operation.checkpoint()
     conn = get_db_connection()
     job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     conn.close()
@@ -847,7 +977,8 @@ def verify_job_posting(job_id: int) -> dict:
         raise HTTPException(status_code=404, detail="Job not found.")
 
     checked_at = datetime.now().isoformat(timespec="seconds")
-    outcome = inspect_job_posting(job["url"])
+    outcome = inspect_job_posting(job["url"], cancel_check=operation.checkpoint)
+    operation.checkpoint()
     details = outcome["details"]
     if not details and outcome.get("status") != "stale":
         raise HTTPException(
@@ -882,7 +1013,11 @@ def verify_job_posting(job_id: int) -> dict:
     return result
 
 @app.post("/api/jobs/search")
-def search_jobs(req: SearchRequest, background_tasks: BackgroundTasks) -> dict:
+def search_jobs(
+    req: SearchRequest,
+    background_tasks: BackgroundTasks,
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
     """
     Start a background job crawl and match analysis task using the user keywords and locations.
     
@@ -896,6 +1031,12 @@ def search_jobs(req: SearchRequest, background_tasks: BackgroundTasks) -> dict:
     global IS_SEARCHING, LAST_SEARCH_RESULT
     if IS_SEARCHING:
         return {"success": False, "message": "A job search is already in progress."}
+    operation = start_operation(operation_id)
+    try:
+        operation.checkpoint()
+    except OperationCancelled:
+        finish_operation(operation)
+        return {"success": False, "cancelled": True, "message": "Search stopped before it started."}
     LAST_SEARCH_RESULT = None
     if req.save_search:
         search_name = (req.saved_search_name or req.keywords or "Resume-suggested search").strip()
@@ -932,7 +1073,7 @@ def search_jobs(req: SearchRequest, background_tasks: BackgroundTasks) -> dict:
             conn.commit()
         conn.close()
     IS_SEARCHING = True
-    background_tasks.add_task(run_search_wrapper, req.keywords, req.location)
+    background_tasks.add_task(run_search_wrapper, req.keywords, req.location, operation)
     capture_event(
         "job_search_started",
         {
@@ -944,7 +1085,10 @@ def search_jobs(req: SearchRequest, background_tasks: BackgroundTasks) -> dict:
 
 # Resume tailoring endpoints
 @app.post("/api/jobs/{job_id}/tailor")
-def tailor_resume_endpoint(job_id: int) -> dict:
+def tailor_resume_endpoint(
+    job_id: int,
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
     """
     Generate a tailored resume and cover letter for a specific job matching the candidate's profile.
     
@@ -954,7 +1098,20 @@ def tailor_resume_endpoint(job_id: int) -> dict:
     Returns:
         dict: Containing the tailored resume, cover letter, and U.S. HQ location.
     """
+    with operation_scope(operation_id) as operation:
+        try:
+            return _tailor_resume_endpoint(job_id, operation)
+        except OperationCancelled:
+            return {
+                "success": False,
+                "cancelled": True,
+                "message": "Tailoring stopped. Previously saved materials and job status were preserved.",
+            }
+
+
+def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     started_at = time.monotonic()
+    operation.checkpoint()
     conn = get_db_connection()
     job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     profile = conn.execute("SELECT base_resume_text, gemini_api_key, google_maps_api_key, resume_mode, prefer_us_headquarters FROM profile LIMIT 1").fetchone()
@@ -977,32 +1134,51 @@ def tailor_resume_endpoint(job_id: int) -> dict:
         job_description=job["description"],
         api_key=api_key,
         resume_mode=profile["resume_mode"] or "general_professional",
+        cancel_check=operation.checkpoint,
     )
-    
+    operation.checkpoint()
     if not res.get("success"):
         raise HTTPException(status_code=500, detail=res.get("error", "Tailoring failed."))
         
     # Generate HTML/PDF file paths
-    resume_filename = f"tailored_resume_{job_id}.pdf"
-    resume_pdf_path = os.path.join(config.OUTPUT_DIR, resume_filename)
+    output_root = Path(config.OUTPUT_DIR)
+    output_root.mkdir(parents=True, exist_ok=True)
+    resume_pdf_path = output_root / f"tailored_resume_{job_id}.pdf"
+    cover_letter_path = cover_letter_output_path(job_id, output_root)
+    with tempfile.NamedTemporaryFile(delete=False, dir=output_root, suffix=".pdf") as temporary_pdf:
+        temporary_resume_path = Path(temporary_pdf.name)
+    operation.track_temporary_file(temporary_resume_path)
     
     # Save the tailored resume PDF only when it satisfies the two-page contract.
     try:
         page_limit = 6 if (profile["resume_mode"] or "") == "academic_cv" else 2
-        pdf_result = generate_resume_pdf(res["tailored_resume"], resume_pdf_path, max_pages=page_limit)
+        pdf_result = generate_resume_pdf(res["tailored_resume"], str(temporary_resume_path), max_pages=page_limit)
+        operation.checkpoint()
     except ValueError as exc:
+        temporary_resume_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     
     # Persist both artifacts before exposing this job as ready for manual application.
     cover_letter_text = res["cover_letter"]
-    cover_letter_path = persist_cover_letter(job_id, cover_letter_text)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        dir=output_root,
+        suffix=".txt",
+    ) as temporary_letter:
+        temporary_letter.write(cover_letter_text.strip() + "\n")
+        temporary_cover_letter_path = Path(temporary_letter.name)
+    operation.track_temporary_file(temporary_cover_letter_path)
+    operation.checkpoint()
     
     # Update application log or store inside job metadata
     # (For convenience we will store tailored details in the applications table with a tailored/pending status)
     conn = get_db_connection()
     # Check if application record already exists for this job
     existing = conn.execute("SELECT id FROM applications WHERE job_id = ?", (job_id,)).fetchone()
-    
+    conn.close()
+
     # Find headquarters
     hq = find_us_headquarters(
         job["company"],
@@ -1012,7 +1188,15 @@ def tailor_resume_endpoint(job_id: int) -> dict:
         job_location=job["location"] or "",
         job_url=job["url"] or "",
     )
-    
+    operation.checkpoint()
+
+    # The two file replacements and database update below are the short commit
+    # boundary. There are intentionally no cancellation checkpoints inside it.
+    os.replace(temporary_resume_path, resume_pdf_path)
+    operation.commit_temporary_file(temporary_resume_path)
+    os.replace(temporary_cover_letter_path, cover_letter_path)
+    operation.commit_temporary_file(temporary_cover_letter_path)
+    conn = get_db_connection()
     now = datetime.now().isoformat(timespec="seconds")
     if existing:
         conn.execute("""
@@ -1021,14 +1205,14 @@ def tailor_resume_endpoint(job_id: int) -> dict:
             created_at = COALESCE(created_at, ?), tailored_at = ?,
             status = CASE WHEN status IN ('applied', 'interview', 'offer') THEN status ELSE 'tailored' END
         WHERE job_id = ?
-        """, (job["company"], job["title"], hq, resume_pdf_path, cover_letter_path, res["tailored_resume"], cover_letter_text, now, now, job_id))
+        """, (job["company"], job["title"], hq, str(resume_pdf_path.resolve()), str(cover_letter_path.resolve()), res["tailored_resume"], cover_letter_text, now, now, job_id))
     else:
         conn.execute("""
         INSERT INTO applications (
             job_id, company, position, date_applied, us_hq, tailored_resume_path,
             cover_letter_path, tailored_resume_text, cover_letter, status, created_at, tailored_at
         ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 'tailored', ?, ?)
-        """, (job_id, job["company"], job["title"], hq, resume_pdf_path, cover_letter_path, res["tailored_resume"], cover_letter_text, now, now))
+        """, (job_id, job["company"], job["title"], hq, str(resume_pdf_path.resolve()), str(cover_letter_path.resolve()), res["tailored_resume"], cover_letter_text, now, now))
         
     # Update job status to tailored
     conn.execute("""
@@ -1104,8 +1288,25 @@ def get_tailored_details(job_id: int) -> dict:
 
 
 @app.patch("/api/jobs/{job_id}/tailored")
-def update_tailored_details(job_id: int, req: MaterialsUpdateRequest) -> dict:
+def update_tailored_details(
+    job_id: int,
+    req: MaterialsUpdateRequest,
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
     """Save reviewed material edits and regenerate the attached resume PDF."""
+    with operation_scope(operation_id) as operation:
+        try:
+            return _update_tailored_details(job_id, req, operation)
+        except OperationCancelled:
+            return {
+                "success": False,
+                "cancelled": True,
+                "message": "PDF regeneration stopped. Previously saved materials were preserved.",
+            }
+
+
+def _update_tailored_details(job_id: int, req: MaterialsUpdateRequest, operation: OperationToken) -> dict:
+    operation.checkpoint()
     resume_text = req.tailored_resume.strip()
     if not resume_text:
         raise HTTPException(status_code=422, detail="Tailored resume text cannot be empty.")
@@ -1121,25 +1322,47 @@ def update_tailored_details(job_id: int, req: MaterialsUpdateRequest) -> dict:
     if not application:
         raise HTTPException(status_code=404, detail="No tailored materials found for this job.")
 
-    output_path = application["tailored_resume_path"] or os.path.join(config.OUTPUT_DIR, f"tailored_resume_{job_id}.pdf")
+    output_path = Path(application["tailored_resume_path"] or os.path.join(config.OUTPUT_DIR, f"tailored_resume_{job_id}.pdf"))
+    output_root = Path(config.OUTPUT_DIR)
+    output_root.mkdir(parents=True, exist_ok=True)
+    cover_letter_path = cover_letter_output_path(job_id, output_root)
     resume_mode = profile["resume_mode"] if profile and profile["resume_mode"] else "general_professional"
     try:
         resume_text = apply_resume_section_template(resume_text, resume_mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     page_limit = 6 if resume_mode == "academic_cv" else 2
+    with tempfile.NamedTemporaryFile(delete=False, dir=output_root, suffix=".pdf") as temporary_pdf:
+        temporary_resume_path = Path(temporary_pdf.name)
+    operation.track_temporary_file(temporary_resume_path)
     try:
-        pdf_result = generate_resume_pdf(resume_text, output_path, max_pages=page_limit)
+        pdf_result = generate_resume_pdf(resume_text, str(temporary_resume_path), max_pages=page_limit)
+        operation.checkpoint()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    cover_letter_path = persist_cover_letter(job_id, cover_letter)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        dir=output_root,
+        suffix=".txt",
+    ) as temporary_letter:
+        temporary_letter.write(cover_letter.strip() + "\n")
+        temporary_cover_letter_path = Path(temporary_letter.name)
+    operation.track_temporary_file(temporary_cover_letter_path)
+    operation.checkpoint()
+
+    os.replace(temporary_resume_path, output_path)
+    operation.commit_temporary_file(temporary_resume_path)
+    os.replace(temporary_cover_letter_path, cover_letter_path)
+    operation.commit_temporary_file(temporary_cover_letter_path)
     conn = get_db_connection()
     conn.execute("""
         UPDATE applications
         SET tailored_resume_text = ?, tailored_resume_path = ?, cover_letter_path = ?, cover_letter = ?
         WHERE job_id = ?
-    """, (resume_text, output_path, cover_letter_path, cover_letter, job_id))
+    """, (resume_text, str(output_path.resolve()), str(cover_letter_path.resolve()), cover_letter, job_id))
     conn.commit()
     conn.close()
     return {

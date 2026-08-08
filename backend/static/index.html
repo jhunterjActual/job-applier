@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-3">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-4">
 </head>
 <body>
     <div class="app-container">
@@ -695,17 +695,22 @@
     </div>
 
     <!-- Loading / Applying Modal -->
-    <div class="modal modal-sm" id="loading-modal">
+    <div class="modal modal-sm" id="loading-modal" role="dialog" aria-modal="true" aria-labelledby="loading-title" aria-describedby="loading-subtitle">
         <div class="modal-content text-center">
             <div class="spinner-container">
                 <div class="dual-ring-spinner"></div>
             </div>
             <h3 id="loading-title">Processing Request...</h3>
             <p id="loading-subtitle" class="text-muted">Please wait while JobApplier prepares your request.</p>
+            <div class="loading-actions" id="loading-actions" hidden>
+                <button type="button" class="btn btn-secondary" id="stop-loading-btn">
+                    <i class="fa-solid fa-stop"></i> Stop
+                </button>
+            </div>
         </div>
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-3"></script>
+    <script src="/static/app.js?v=20260808-4"></script>
 </body>
 </html>
