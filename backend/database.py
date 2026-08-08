@@ -42,7 +42,7 @@ def init_db() -> None:
         openai_api_key TEXT DEFAULT '',
         ai_provider TEXT NOT NULL DEFAULT 'gemini',
         ai_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash',
-        maps_provider TEXT NOT NULL DEFAULT 'google',
+        maps_provider TEXT NOT NULL DEFAULT 'openstreetmap',
         prefer_us_headquarters INTEGER NOT NULL DEFAULT 1
     )
     """)
@@ -248,7 +248,7 @@ def init_db() -> None:
             gemini_api_key, openai_api_key, ai_provider, ai_model,
             maps_provider, suggested_keywords, google_maps_api_key
         )
-        VALUES ('', '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 'google', '', '')
+        VALUES ('', '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 'openstreetmap', '', '')
         """)
     # Clean up any previously stored junk/closed postings
     cursor.execute("""

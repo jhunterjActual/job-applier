@@ -19,7 +19,7 @@ MAPS_PROVIDERS = {
     "google": {"label": "Google Places", "requires_key": True},
     "openstreetmap": {"label": "OpenStreetMap Nominatim", "requires_key": False},
 }
-DEFAULT_MAPS_PROVIDER = "google"
+DEFAULT_MAPS_PROVIDER = "openstreetmap"
 GOOGLE_PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 OPENSTREETMAP_ATTRIBUTION = "© OpenStreetMap contributors"
 MAX_MAPS_RESPONSE_BYTES = 1024 * 1024

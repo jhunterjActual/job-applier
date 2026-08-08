@@ -233,6 +233,21 @@ class MapsProviderAbstractionTests(unittest.TestCase):
             self.assertFalse(maps_provider_ready({"maps_provider": "google", "google_maps_api_key": ""}))
             self.assertTrue(maps_provider_ready({"maps_provider": "openstreetmap", "google_maps_api_key": ""}))
 
+    def test_new_profile_defaults_select_openstreetmap(self) -> None:
+        self.assertEqual("openstreetmap", maps_providers_module.normalize_maps_provider(None))
+        profile = app_module.ProfileUpdate(
+            name="Candidate",
+            email="candidate@example.test",
+            phone="",
+            github="",
+            linkedin="",
+            website="",
+            base_resume_text="Resume",
+        )
+        self.assertEqual("openstreetmap", profile.maps_provider)
+        html = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('<option value="openstreetmap" selected>', html)
+
     def test_headquarters_fallback_uses_selected_ai_provider_and_requires_verification(self) -> None:
         with (
             patch.object(maps_providers_module, "lookup_headquarters", return_value=HeadquartersResult()),
@@ -499,8 +514,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-6", html_source)
-        self.assertIn("index.css?v=20260808-6", html_source)
+        self.assertIn("app.js?v=20260808-7", html_source)
+        self.assertIn("index.css?v=20260808-7", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -508,7 +523,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.7", source)
+                self.assertIn("20260808.8", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -2098,12 +2113,32 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
             )}
             profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(profile)")}
             application_columns = {row[1] for row in connection.execute("PRAGMA table_info(applications)")}
+            maps_provider = connection.execute("SELECT maps_provider FROM profile WHERE id = 1").fetchone()[0]
             connection.close()
         self.assertIn("source_diagnostics", tables)
         self.assertIn("headquarters_cache", tables)
         self.assertIn("idx_source_diagnostics_recorded_at", indexes)
         self.assertIn("maps_provider", profile_columns)
+        self.assertEqual("openstreetmap", maps_provider)
         self.assertTrue({"headquarters_source", "headquarters_attribution"}.issubset(application_columns))
+
+    def test_maps_provider_migration_preserves_google_for_existing_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "legacy-profile.db"
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE profile (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO profile VALUES (1, 'Existing Candidate');
+            """)
+            connection.commit()
+            connection.close()
+            with patch.object(database_module, "DB_PATH", database_path):
+                database_module.init_db()
+            connection = sqlite3.connect(database_path)
+            provider = connection.execute("SELECT maps_provider FROM profile WHERE id = 1").fetchone()[0]
+            connection.close()
+
+        self.assertEqual("google", provider)
 
 
 class LifecycleSchemaTests(unittest.TestCase):

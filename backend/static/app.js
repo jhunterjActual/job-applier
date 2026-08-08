@@ -847,7 +847,7 @@ function markAIProviderSettingsDirty() {
 }
 
 function selectedMapsProvider() {
-    return MAPS_PROVIDERS[pMapsProvider?.value] ? pMapsProvider.value : "google";
+    return MAPS_PROVIDERS[pMapsProvider?.value] ? pMapsProvider.value : "openstreetmap";
 }
 
 function selectedMapsProviderMeta() {
@@ -1005,7 +1005,7 @@ async function loadProfile() {
             pAiModel.value = profile.ai_model || selectedAIProviderMeta().defaultModel;
             pApiKey.value = "";
             pOpenAIApiKey.value = "";
-            pMapsProvider.value = profile.maps_provider || "google";
+            pMapsProvider.value = profile.maps_provider || "openstreetmap";
             pGoogleApiKey.value = "";
             geminiKeyConfigured = !!profile.gemini_api_key_configured;
             openAIKeyConfigured = !!profile.openai_api_key_configured;

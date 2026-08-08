@@ -63,7 +63,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.7"
+APP_BUILD = "20260808.8"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -222,7 +222,7 @@ class ProfileUpdate(BaseModel):
     resume_mode: Literal["it", "technical_executive", "general_professional", "federal", "healthcare", "education", "sales", "trades_operations", "academic_cv", "cover_letter"] = "general_professional"
     ai_provider: Literal["gemini", "openai"] = "gemini"
     ai_model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._:/-]+$")
-    maps_provider: Literal["google", "openstreetmap"] = "google"
+    maps_provider: Literal["google", "openstreetmap"] = "openstreetmap"
     prefer_us_headquarters: bool = True
 
 

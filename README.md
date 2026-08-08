@@ -114,7 +114,7 @@ If you prefer setting up manually or are on macOS/Linux:
 1. **Set up Profile**:
    - Go to the **Profile & Resume** tab.
    - Enter your contact details and personal links, select **Google Gemini** or **OpenAI**, choose a compatible model, and paste that provider's API key.
-   - Select **Google Places** or **OpenStreetMap Nominatim** for headquarters lookups. Google requires a saved Places API key; OpenStreetMap requires no key.
+   - New profiles use **OpenStreetMap Nominatim** for headquarters lookups by default. You can select **Google Places** instead with a saved Places API key.
    - Each key field shows a privacy-safe **Saved** or **Not saved** status. Saved keys are never displayed; leave the field blank to keep the current key or enter a new key to replace it.
    - Save the settings, then use **Test Saved AI Provider** to validate the stored key, selected model, and structured-output capability before starting a long search.
    - Use **Test Saved Maps Provider** for a small, user-triggered capability check. The public Nominatim option identifies the app, sends at most one request per second, caches successful results, and must not be used for bulk or autocomplete traffic. Set `NOMINATIM_BASE_URL` to an approved self-hosted/third-party endpoint when public-service limits do not fit your use.
