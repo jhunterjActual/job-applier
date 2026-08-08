@@ -600,6 +600,18 @@ select:focus {
     margin-top: 7px;
 }
 
+.provider-test-status {
+    margin: -2px 0 0;
+}
+
+.provider-test-status.success {
+    color: var(--color-green);
+}
+
+.provider-test-status.error {
+    color: var(--color-red);
+}
+
 .secret-key-status {
     flex: 0 0 auto;
     padding: 3px 8px;

@@ -16,14 +16,15 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Generalized to support Greenhouse's modern `job-boards.greenhouse.io` migration.
    - Uses a modern browser compatibility profile while rejecting job-board fallback and browser-error pages.
 
-2. **Cost-Efficient AI Matching**:
+2. **Provider-Selectable AI Matching**:
    - Matches candidate resumes against crawled listings and computes match scores (0-100%) with key pros/cons.
-   - **Batch AI Matching**: Groups discovered job listings into a single batch call to fit within strict Gemini Free Tier daily limits (20 requests/day).
+   - Supports bring-your-own Google Gemini or OpenAI API keys, a user-selected model, and an explicit key/model/capability test without returning credentials to the browser.
+   - **Batch AI Matching**: Groups discovered job listings into a single structured-output request to reduce provider quota usage.
    - **Keyword Caching**: Analyzes your resume to auto-suggest and store search terms, preventing redundant API calls.
 
 3. **Combined Resume & Cover Letter Tailoring (50% Quota Savings)**:
    - Rewrites your resume highlights for specific postings and drafts custom cover letters.
-   - Uses a single consolidated Gemini request returning JSON to halve quota usage, letting you process twice as many jobs.
+   - Uses a single consolidated, schema-validated provider request returning JSON instead of separate resume and cover-letter calls.
    - Converts Markdown and plain text outputs into polished, print-ready PDF files using Playwright.
 
 4. **Address Resolution (with Google Places API + Gemini Fallback)**:
@@ -44,7 +45,7 @@ The application features a **FastAPI backend** that doubles as a static file ser
 ## 🛠️ Architecture
 
 * **Frontend**: Vanilla HTML5, Vanilla CSS3 (custom dark-mode grid design, glassmorphic cards, transition glows), and Vanilla ES6+ JavaScript.
-* **Backend**: FastAPI (Python), SQLite (database), Playwright (scraping and browser control), and the `google-genai` SDK.
+* **Backend**: FastAPI (Python), SQLite (database), Playwright (scraping and browser control), the `google-genai` SDK, and the OpenAI Responses REST API.
 
 ---
 
@@ -53,7 +54,7 @@ The application features a **FastAPI backend** that doubles as a static file ser
 ### Prerequisites
 * Python 3.10.2 or higher.
 * Google Chrome or Chromium (installed automatically by Playwright).
-* A **Gemini API Key** (Get one free from [Google AI Studio](https://aistudio.google.com/)).
+* A **Gemini API Key** from [Google AI Studio](https://aistudio.google.com/) or an **OpenAI API Key**.
 * *Optional*: A Google Maps API Key with the **Places API** enabled.
 
 ### Quick Start (Windows)
@@ -112,8 +113,9 @@ If you prefer setting up manually or are on macOS/Linux:
 
 1. **Set up Profile**:
    - Go to the **Profile & Resume** tab.
-   - Enter your contact details, personal links, and paste your **Gemini API Key** (and optional **Google Maps API Key**).
+   - Enter your contact details and personal links, select **Google Gemini** or **OpenAI**, choose a compatible model, and paste that provider's API key (plus an optional **Google Maps API Key**).
    - Each key field shows a privacy-safe **Saved** or **Not saved** status. Saved keys are never displayed; leave the field blank to keep the current key or enter a new key to replace it.
+   - Save the settings, then use **Test Saved AI Provider** to validate the stored key, selected model, and structured-output capability before starting a long search.
    - Keep **Prefer a U.S. headquarters address** selected when U.S. unemployment reporting requires a domestic employer address; clear it to prefer the employer's primary global headquarters.
    - Upload your base resume as a `.txt` or `.md` file, or copy-paste it directly.
    - Click **Save Settings**.
@@ -147,7 +149,7 @@ Permanent deletion also creates a privacy-minimized local suppression record so 
 - Save frequently used keyword/location combinations above the search form. Use the score, status, and sort controls to focus the active list.
 - Saved searches can optionally provide daily or weekly local reminders while the app is running; rerunning the saved search advances its next reminder.
 - Use the circular-arrow action on a job row to recheck whether the employer posting remains available.
-- Use **Add Job by URL** when search does not find a posting. The app validates the public URL, detects an existing canonical match, previews extracted details from supported, generic, and readable framed job pages, and lets you correct required fields before saving. If a site blocks automated reading or protects an embedded frame, the preview explains that the posting could not be read while preserving manual entry. A configured Gemini key adds match analysis; otherwise the imported job remains visible as **Unscored** and can still be tailored.
+- Use **Add Job by URL** when search does not find a posting. The app validates the public URL, detects an existing canonical match, previews extracted details from supported, generic, and readable framed job pages, and lets you correct required fields before saving. If a site blocks automated reading or protects an embedded frame, the preview explains that the posting could not be read while preserving manual entry. A configured key for the selected AI provider adds match analysis; otherwise the imported job remains visible as **Unscored** and can still be tailored.
 - Provider health diagnostics distinguish stale postings, access challenges, provider failures, and likely ATS URL or data-format changes instead of silently hiding a failing source. Lever details use its public Postings API first and fall back to browser extraction only when that API is unavailable.
 - Remote searches use explicit time, download-size, candidate-count, and retained-description budgets. When a provider reaches one of those limits, completed results remain available and **Search notes** explains why that provider's results may be partial.
 - Source warnings and search notes can be dismissed for the current view. **Source diagnostics** retains the newest 500 local notices for later review, JSON export, or explicit clearing. History contains only timestamps, allowlisted provider/code values, and bounded aggregate counters; it excludes searches, locations, URLs, job details, resumes, credentials, rendered messages, and raw errors.

@@ -11,12 +11,14 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import app as app_module
+import ai_providers as ai_providers_module
 import database as database_module
 import materials as materials_module
 import operations as operations_module
 import searcher as searcher_module
 import source_diagnostics as source_diagnostics_module
 from fastapi.testclient import TestClient
+from ai_providers import AIProviderError, AIProviderSettings, CapabilityResponse, generate_structured, settings_from_profile
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from materials import material_download_name, persist_cover_letter, resolve_output_file
 from database import get_db_connection
@@ -71,6 +73,87 @@ class OperationCancellationTests(unittest.TestCase):
             operations_module.finish_operation(token)
             self.assertFalse(temporary_file.exists())
             self.assertFalse(operations_module.request_cancellation(operation_id))
+
+
+class AIProviderAbstractionTests(unittest.TestCase):
+    def test_openai_responses_request_uses_strict_schema_and_keeps_key_out_of_body(self) -> None:
+        output = {
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": json.dumps({"ready": True}),
+                }],
+            }]
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return json.dumps(output).encode("utf-8")
+
+        settings = AIProviderSettings("openai", "gpt-5-mini", "private-test-key")
+        with patch.object(ai_providers_module.urllib.request, "urlopen", return_value=FakeResponse()) as open_url:
+            result = generate_structured(settings, "Return ready.", CapabilityResponse)
+
+        request = open_url.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual({"ready": True}, result)
+        self.assertEqual("https://api.openai.com/v1/responses", request.full_url)
+        self.assertEqual("Bearer private-test-key", request.get_header("Authorization"))
+        self.assertNotIn("private-test-key", request.data.decode("utf-8"))
+        self.assertEqual("json_schema", payload["text"]["format"]["type"])
+        self.assertTrue(payload["text"]["format"]["strict"])
+        self.assertFalse(payload["text"]["format"]["schema"]["additionalProperties"])
+
+    def test_openai_authentication_error_is_provider_specific_and_redacted(self) -> None:
+        settings = AIProviderSettings("openai", "gpt-5-mini", "private-test-key")
+        response_error = ai_providers_module.urllib.error.HTTPError(
+            "https://api.openai.com/v1/responses", 401, "Unauthorized private-test-key", None, None
+        )
+        with (
+            patch.object(ai_providers_module.urllib.request, "urlopen", side_effect=response_error),
+            self.assertRaises(AIProviderError) as raised,
+        ):
+            generate_structured(settings, "Return ready.", CapabilityResponse)
+
+        self.assertEqual("authentication", raised.exception.code)
+        self.assertIn("OpenAI rejected", str(raised.exception))
+        self.assertNotIn("private-test-key", str(raised.exception))
+
+    def test_profile_settings_select_the_openai_key_without_exposing_other_secrets(self) -> None:
+        settings = settings_from_profile({
+            "ai_provider": "openai",
+            "ai_model": "gpt-5-mini",
+            "gemini_api_key": "gemini-secret",
+            "openai_api_key": "openai-secret",
+        })
+        self.assertEqual("openai", settings.provider)
+        self.assertEqual("gpt-5-mini", settings.model)
+        self.assertEqual("openai-secret", settings.api_key)
+
+    def test_keyword_extraction_routes_through_selected_provider(self) -> None:
+        with patch.object(
+            searcher_module,
+            "generate_structured",
+            return_value={"titles": ["Data Architect", "Technology Executive"]},
+        ) as provider_call:
+            titles = searcher_module.extract_search_keywords_from_resume(
+                "Evidence-based resume",
+                "openai-secret",
+                ai_provider="openai",
+                ai_model="gpt-5-mini",
+            )
+
+        self.assertEqual(["Data Architect", "Technology Executive"], titles)
+        settings = provider_call.call_args.args[0]
+        self.assertEqual("openai", settings.provider)
+        self.assertEqual("gpt-5-mini", settings.model)
 
 
 class ApplicationMaterialsSafetyTests(unittest.TestCase):
@@ -220,25 +303,11 @@ class ApplicationMaterialsSafetyTests(unittest.TestCase):
 
 class ResumeRenderingTests(unittest.TestCase):
     def test_tailoring_uses_validated_structured_response(self) -> None:
-        class FakeResponse:
-            text = '{"tailored_resume": "unterminated'
-            parsed = {
-                "tailored_resume": "# Candidate\n\n## Professional Summary\n\nEvidence-based summary.",
-                "cover_letter": "August 4, 2026\n\nDear Hiring Team,\n\nI am interested in this role.",
-            }
-
-        class FakeModels:
-            config = None
-
-            def generate_content(self, **kwargs):
-                self.config = kwargs["config"]
-                return FakeResponse()
-
-        class FakeClient:
-            models = FakeModels()
-
-        client = FakeClient()
-        with patch("tailor.get_client", return_value=client):
+        generated = {
+            "tailored_resume": "# Candidate\n\n## Professional Summary\n\nEvidence-based summary.",
+            "cover_letter": "August 4, 2026\n\nDear Hiring Team,\n\nI am interested in this role.",
+        }
+        with patch("tailor.generate_structured", return_value=generated) as provider_call:
             result = tailor_resume_and_cover_letter(
                 "# Candidate\n\n## Experience\n\nEvidence.",
                 "Director",
@@ -248,7 +317,7 @@ class ResumeRenderingTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertIn("## Professional Summary", result["tailored_resume"])
-        self.assertIs(client.models.config.response_schema, TailoringResponse)
+        self.assertIs(provider_call.call_args.args[2], TailoringResponse)
 
     def test_markdown_is_escaped_and_supported_tokens_are_rendered(self) -> None:
         rendered = markdown_to_html(
@@ -274,6 +343,8 @@ class FrontendStartupTests(unittest.TestCase):
             "lifecycle-form", "undo-lifecycle-btn", "save-materials-btn",
             "download-resume-btn", "download-cover-letter-btn",
             "saved-search-select", "p-resume-mode",
+            "p-ai-provider", "p-ai-model", "p-openai-apikey",
+            "p-openai-key-status", "p-openai-key-help", "test-ai-provider-btn",
             "p-prefer-us-headquarters",
             "p-gemini-key-status", "p-gemini-key-help",
             "p-google-key-status", "p-google-key-help",
@@ -292,9 +363,9 @@ class FrontendStartupTests(unittest.TestCase):
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
-        self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260808-4", html_source)
-        self.assertIn("index.css?v=20260808-4", html_source)
+        self.assertIn("Checking AI Provider", html_source)
+        self.assertIn("app.js?v=20260808-5", html_source)
+        self.assertIn("index.css?v=20260808-5", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -302,7 +373,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.5", source)
+                self.assertIn("20260808.6", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -377,6 +448,7 @@ class FrontendStartupTests(unittest.TestCase):
         app_source = (Path(__file__).parent / "app.py").read_text(encoding="utf-8")
         self.assertNotIn("CORSMiddleware", app_source)
         self.assertIn('result.pop("gemini_api_key"', app_source)
+        self.assertIn('result.pop("openai_api_key"', app_source)
         self.assertIn('result.pop("google_maps_api_key"', app_source)
 
     def test_profile_ui_exposes_privacy_safe_key_status_and_replacement_guidance(self) -> None:
@@ -389,6 +461,7 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn("Leave this field blank to keep the current key", script_source)
         self.assertNotRegex(script_source, r"profile\.google_maps_api_key(?!_configured)")
         self.assertNotRegex(script_source, r"profile\.gemini_api_key(?!_configured)")
+        self.assertNotRegex(script_source, r"profile\.openai_api_key(?!_configured)")
 
     def test_manual_import_ui_preserves_unscored_jobs(self) -> None:
         script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
@@ -616,9 +689,14 @@ class ProfileSecretPresenceTests(unittest.TestCase):
                 id INTEGER PRIMARY KEY,
                 name TEXT,
                 gemini_api_key TEXT,
-                google_maps_api_key TEXT
+                openai_api_key TEXT,
+                google_maps_api_key TEXT,
+                ai_provider TEXT,
+                ai_model TEXT
             );
-            INSERT INTO profile VALUES (1, 'Test Candidate', 'gemini-secret', '');
+            INSERT INTO profile VALUES (
+                1, 'Test Candidate', 'gemini-secret', '', '', 'gemini', 'gemini-2.5-flash'
+            );
         """)
         connection.commit()
         connection.close()
@@ -636,9 +714,55 @@ class ProfileSecretPresenceTests(unittest.TestCase):
             profile = app_module.get_profile()
 
         self.assertTrue(profile["gemini_api_key_configured"])
+        self.assertFalse(profile["openai_api_key_configured"])
         self.assertFalse(profile["google_maps_api_key_configured"])
         self.assertNotIn("gemini_api_key", profile)
+        self.assertNotIn("openai_api_key", profile)
         self.assertNotIn("google_maps_api_key", profile)
+
+    def test_openai_secret_update_returns_only_presence_flags(self) -> None:
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module.config, "OPENAI_API_KEY", ""),
+            patch.dict(os.environ, {}, clear=False),
+        ):
+            os.environ.pop("OPENAI_API_KEY", None)
+            result = app_module.update_profile_secrets(
+                app_module.ProfileSecretsUpdate(openai_api_key="openai-private")
+            )
+
+        connection = self.connection_factory()
+        stored = connection.execute("SELECT openai_api_key FROM profile WHERE id = 1").fetchone()[0]
+        connection.close()
+        self.assertEqual("openai-private", stored)
+        self.assertTrue(result["openai_api_key_configured"])
+        self.assertNotIn("openai_api_key", result)
+
+    def test_provider_capability_endpoint_uses_saved_provider_and_model(self) -> None:
+        connection = self.connection_factory()
+        connection.execute(
+            "UPDATE profile SET ai_provider = 'openai', ai_model = 'gpt-5-mini', openai_api_key = 'saved-key' WHERE id = 1"
+        )
+        connection.commit()
+        connection.close()
+        provider_result = {
+            "success": True,
+            "provider": "openai",
+            "provider_label": "OpenAI",
+            "model": "gpt-5-mini",
+            "message": "OpenAI is ready for matching and tailoring.",
+        }
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_provider_capability", return_value=provider_result) as validate,
+        ):
+            result = app_module.validate_ai_provider()
+
+        settings = validate.call_args.args[0]
+        self.assertEqual(provider_result, result)
+        self.assertEqual("openai", settings.provider)
+        self.assertEqual("gpt-5-mini", settings.model)
+        self.assertEqual("saved-key", settings.api_key)
 
 
 class LocalBrowserBoundaryTests(unittest.TestCase):
@@ -1058,10 +1182,11 @@ class HeadquartersPreferenceTests(unittest.TestCase):
                 CREATE TABLE profile (
                     id INTEGER PRIMARY KEY, name TEXT, email TEXT, phone TEXT,
                     github TEXT, linkedin TEXT, website TEXT, base_resume_text TEXT,
-                    resume_mode TEXT, prefer_us_headquarters INTEGER,
+                    resume_mode TEXT, ai_provider TEXT, ai_model TEXT,
+                    prefer_us_headquarters INTEGER,
                     suggested_keywords TEXT
                 );
-                INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 1, '');
+                INSERT INTO profile VALUES (1, '', '', '', '', '', '', '', '', 'gemini', 'gemini-2.5-flash', 1, '');
             """)
             connection.close()
 
@@ -1826,6 +1951,7 @@ class LifecycleSchemaTests(unittest.TestCase):
         profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(profile)")}
         self.assertIn("resume_mode", profile_columns)
         self.assertIn("prefer_us_headquarters", profile_columns)
+        self.assertTrue({"ai_provider", "ai_model", "openai_api_key"}.issubset(profile_columns))
         self.assertEqual(1, connection.execute("PRAGMA foreign_keys").fetchone()[0])
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({"application_status_history", "saved_searches", "job_suppressions", "source_diagnostics"}.issubset(tables))

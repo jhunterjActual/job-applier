@@ -7,8 +7,16 @@ import urllib.parse
 import urllib.error
 import urllib.request
 from playwright.sync_api import sync_playwright
-from google import genai
-from config import get_gemini_api_key
+from pydantic import BaseModel
+from ai_providers import (
+    AIProviderError,
+    AIProviderSettings,
+    default_model,
+    generate_structured,
+    normalize_provider,
+    settings_from_profile,
+)
+import config
 from database import get_db_connection
 from operations import OperationCancelled
 from tailor import analyze_job_match, analyze_job_matches_batch
@@ -30,6 +38,10 @@ PROVIDER_DOMAINS = {
     "ashby": "ashbyhq.com",
     "smartrecruiters": "smartrecruiters.com",
 }
+
+
+class SearchKeywordResponse(BaseModel):
+    titles: list[str]
 INVALID_JOB_TEXT = (
     "internet explorer 11 is no longer supported",
     "consent to cookies",
@@ -694,26 +706,32 @@ def search_yahoo_jobs(keywords: str, location: str = "", diagnostics: dict | Non
             
     return jobs
 
-def extract_search_keywords_from_resume(resume_text: str, api_key: str = None) -> list:
+def extract_search_keywords_from_resume(
+    resume_text: str,
+    api_key: str = None,
+    ai_provider: str = "gemini",
+    ai_model: str | None = None,
+) -> list:
     """
     Analyzes the candidate's base resume text and extracts the top 3 best
-    matching job title search keywords using Gemini.
+    matching job title search keywords using the selected AI provider.
     
     Args:
         resume_text (str): The candidate's raw base resume.
-        api_key (str, optional): The Gemini API key. Defaults to None.
+        api_key (str, optional): The selected provider's API key. Defaults to None.
         
     Returns:
         list: A list of extracted job title keyword strings.
     """
-    import json
-    from google.genai import types
-    key = api_key or get_gemini_api_key()
+    provider = normalize_provider(ai_provider)
+    key = (api_key or "").strip()
+    if not key:
+        key = config.get_openai_api_key() if provider == "openai" else config.get_gemini_api_key()
     if not key:
         return ["Software Engineer"]
-        
+
+    settings = AIProviderSettings(provider, (ai_model or default_model(provider)).strip(), key)
     try:
-        client = genai.Client(api_key=key)
         prompt = f"""
         Analyze this candidate's resume and determine the top 3 job title keywords (specific search phrases) they are highly qualified for.
         
@@ -725,23 +743,17 @@ def extract_search_keywords_from_resume(resume_text: str, api_key: str = None) -
         Candidate's Resume:
         \"\"\"{resume_text}\"\"\"
         
-        Output a JSON list of strings, for example:
-        ["Data Engineer", "Software Engineer", "Backend Developer"]
-        Return ONLY valid JSON.
+        Return the titles using the supplied response schema.
         """
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
-        titles = json.loads(response.text.strip(), strict=False)
+        titles = generate_structured(settings, prompt, SearchKeywordResponse).get("titles", [])
         if isinstance(titles, list) and len(titles) > 0:
-            return [str(t) for t in titles]
+            return [str(title).strip() for title in titles[:3] if str(title).strip()]
         return ["Software Engineer"]
-    except Exception as e:
-        print(f"Error extracting keywords from resume: {e}")
+    except AIProviderError as exc:
+        print(f"AI keyword extraction did not complete: {exc}")
+        return ["Software Engineer"]
+    except Exception:
+        print("AI keyword extraction did not complete because the response was invalid.")
         return ["Software Engineer"]
 
 def _reject_job_fetch(diagnostic: dict | None, status: str, reason: str) -> dict:
@@ -1050,13 +1062,14 @@ def run_job_search_and_matching(
             raise
 
     check_cancelled()
-    profile = conn.execute("SELECT base_resume_text, gemini_api_key, suggested_keywords FROM profile LIMIT 1").fetchone()
+    profile = conn.execute("SELECT * FROM profile LIMIT 1").fetchone()
     if not profile or not profile["base_resume_text"]:
         conn.close()
         return {"error": "Profile or base resume text is missing. Please setup your profile first."}
         
     resume_text = profile["base_resume_text"]
-    api_key = profile["gemini_api_key"]
+    ai_settings = settings_from_profile(profile)
+    api_key = ai_settings.api_key
     
     # 2. Determine search terms
     search_keywords = []
@@ -1069,7 +1082,12 @@ def run_job_search_and_matching(
             print(f"Using cached suggested keywords from database: {search_keywords}")
         else:
             check_cancelled()
-            search_keywords = extract_search_keywords_from_resume(resume_text, api_key)
+            search_keywords = extract_search_keywords_from_resume(
+                resume_text,
+                api_key,
+                ai_provider=ai_settings.provider,
+                ai_model=ai_settings.model,
+            )
             check_cancelled()
             # Save suggestions to cache
             conn.execute("UPDATE profile SET suggested_keywords = ? WHERE id = 1", (",".join(search_keywords),))
@@ -1182,10 +1200,17 @@ def run_job_search_and_matching(
     
     # 5. Run AI matching in a single batch call to conserve API requests!
     batch_results = {}
+    ai_error = None
     if scraped_jobs:
         try:
             check_cancelled()
-            batch_res = analyze_job_matches_batch(resume_text, scraped_jobs, api_key)
+            batch_res = analyze_job_matches_batch(
+                resume_text,
+                scraped_jobs,
+                api_key,
+                ai_provider=ai_settings.provider,
+                ai_model=ai_settings.model,
+            )
             check_cancelled()
             if batch_res.get("success"):
                 # Map index to match results
@@ -1197,11 +1222,13 @@ def run_job_search_and_matching(
                             "analysis": match.get("match_analysis", "Matched successfully.")
                         }
             else:
-                print(f"Batch matching API error: {batch_res.get('error')}")
+                ai_error = batch_res.get("error") or "The selected AI provider could not score the discovered jobs."
+                print(f"Batch matching API error: {ai_error}")
         except OperationCancelled:
             raise
-        except Exception as e:
-            print(f"Failed to run batch matching: {e}")
+        except Exception:
+            ai_error = "The selected AI provider could not score the discovered jobs."
+            print("Failed to run batch matching because the AI response was invalid.")
             
     # 6. Insert matches into DB
     matches_added = 0
@@ -1251,8 +1278,9 @@ def run_job_search_and_matching(
     check_cancelled()
     conn.close()
     return {
-        "success": True,
+        "success": ai_error is None,
         "jobs_added": matches_added,
+        "error": ai_error,
         "provider_health": provider_health,
         "provider_alerts": alerts,
     }

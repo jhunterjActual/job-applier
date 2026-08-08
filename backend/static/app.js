@@ -10,7 +10,9 @@ let cleanupActionEnableTimer = null;
 let currentJobs = new Map();
 let lifecycleJobId = null;
 let geminiKeyConfigured = false;
+let openAIKeyConfigured = false;
 let googleMapsKeyConfigured = false;
+let aiProviderSettingsSaved = false;
 let loadedJobs = [];
 let jobImportCanonicalUrl = null;
 let sourceDiagnosticsOpener = null;
@@ -32,10 +34,15 @@ const pPhone = document.getElementById("p-phone");
 const pGithub = document.getElementById("p-github");
 const pLinkedin = document.getElementById("p-linkedin");
 const pWebsite = document.getElementById("p-website");
+const pAiProvider = document.getElementById("p-ai-provider");
+const pAiModel = document.getElementById("p-ai-model");
 const pApiKey = document.getElementById("p-apikey");
+const pOpenAIApiKey = document.getElementById("p-openai-apikey");
 const pGoogleApiKey = document.getElementById("p-google-apikey");
 const pGeminiKeyStatus = document.getElementById("p-gemini-key-status");
 const pGeminiKeyHelp = document.getElementById("p-gemini-key-help");
+const pOpenAIKeyStatus = document.getElementById("p-openai-key-status");
+const pOpenAIKeyHelp = document.getElementById("p-openai-key-help");
 const pGoogleKeyStatus = document.getElementById("p-google-key-status");
 const pGoogleKeyHelp = document.getElementById("p-google-key-help");
 const pResume = document.getElementById("p-resume");
@@ -43,7 +50,15 @@ const pResumeMode = document.getElementById("p-resume-mode");
 const pPreferUsHeadquarters = document.getElementById("p-prefer-us-headquarters");
 const resumeFileUpload = document.getElementById("resume-file-upload");
 const toggleApiVisibilityBtn = document.getElementById("toggle-api-visibility");
+const toggleOpenAIApiVisibilityBtn = document.getElementById("toggle-openai-api-visibility");
 const toggleGoogleApiVisibilityBtn = document.getElementById("toggle-google-api-visibility");
+const testAIProviderBtn = document.getElementById("test-ai-provider-btn");
+const aiProviderTestStatus = document.getElementById("ai-provider-test-status");
+
+const AI_PROVIDERS = {
+    gemini: { label: "Google Gemini", defaultModel: "gemini-2.5-flash" },
+    openai: { label: "OpenAI", defaultModel: "gpt-5-mini" }
+};
 
 // Search Form Elements
 const searchForm = document.getElementById("search-form");
@@ -144,6 +159,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Attach form and click listeners
     bindEvent(profileForm, "submit", saveProfile);
+    bindEvent(pAiProvider, "change", handleAIProviderChange);
+    bindEvent(pAiModel, "input", markAIProviderSettingsDirty);
+    bindEvent(pApiKey, "input", markAIProviderSettingsDirty);
+    bindEvent(pOpenAIApiKey, "input", markAIProviderSettingsDirty);
+    bindEvent(testAIProviderBtn, "click", testSavedAIProvider);
     bindEvent(resumeFileUpload, "change", handleResumeUpload);
     bindEvent(searchForm, "submit", searchJobs);
     bindEvent(refreshJobsBtn, "click", loadJobs);
@@ -390,19 +410,18 @@ function switchTab(tabId) {
 
 // Password Visibility Toggle
 function setupPasswordToggle() {
-    if (!toggleApiVisibilityBtn || !toggleGoogleApiVisibilityBtn) return;
-    toggleApiVisibilityBtn.addEventListener("click", () => {
-        const type = pApiKey.getAttribute("type") === "password" ? "text" : "password";
-        pApiKey.setAttribute("type", type);
-        const icon = toggleApiVisibilityBtn.querySelector("i");
-        icon.className = type === "password" ? "fa-solid fa-eye" : "fa-solid fa-eye-slash";
-    });
-    
-    toggleGoogleApiVisibilityBtn.addEventListener("click", () => {
-        const type = pGoogleApiKey.getAttribute("type") === "password" ? "text" : "password";
-        pGoogleApiKey.setAttribute("type", type);
-        const icon = toggleGoogleApiVisibilityBtn.querySelector("i");
-        icon.className = type === "password" ? "fa-solid fa-eye" : "fa-solid fa-eye-slash";
+    [
+        [toggleApiVisibilityBtn, pApiKey],
+        [toggleOpenAIApiVisibilityBtn, pOpenAIApiKey],
+        [toggleGoogleApiVisibilityBtn, pGoogleApiKey]
+    ].forEach(([button, input]) => {
+        if (!button || !input) return;
+        button.addEventListener("click", () => {
+            const type = input.getAttribute("type") === "password" ? "text" : "password";
+            input.setAttribute("type", type);
+            const icon = button.querySelector("i");
+            icon.className = type === "password" ? "fa-solid fa-eye" : "fa-solid fa-eye-slash";
+        });
     });
 }
 
@@ -787,16 +806,59 @@ function logActivity(title, desc, type = "info") {
 }
 
 // Fetch & Update API Key status indicator
-function updateApiKeyStatus(hasKey) {
+function selectedAIProvider() {
+    return AI_PROVIDERS[pAiProvider?.value] ? pAiProvider.value : "gemini";
+}
+
+function selectedAIProviderMeta() {
+    return AI_PROVIDERS[selectedAIProvider()];
+}
+
+function selectedAIKeyConfigured() {
+    return selectedAIProvider() === "openai" ? openAIKeyConfigured : geminiKeyConfigured;
+}
+
+function handleAIProviderChange() {
+    const knownDefaults = new Set(Object.values(AI_PROVIDERS).map(provider => provider.defaultModel));
+    if (!pAiModel.value.trim() || knownDefaults.has(pAiModel.value.trim())) {
+        pAiModel.value = selectedAIProviderMeta().defaultModel;
+    }
+    markAIProviderSettingsDirty();
+    updateSecretStatuses();
+}
+
+function markAIProviderSettingsDirty() {
+    aiProviderSettingsSaved = false;
+    updateProviderTestAvailability();
+}
+
+function updateProviderTestAvailability() {
+    if (!testAIProviderBtn || !aiProviderTestStatus) return;
+    const provider = selectedAIProviderMeta();
+    const hasKey = selectedAIKeyConfigured();
+    testAIProviderBtn.disabled = !aiProviderSettingsSaved || !hasKey;
+    aiProviderTestStatus.className = "form-help full-width provider-test-status";
+    if (!aiProviderSettingsSaved) {
+        aiProviderTestStatus.textContent = "Save provider, model, and key changes before testing.";
+    } else if (!hasKey) {
+        aiProviderTestStatus.textContent = `Save a ${provider.label} API key before testing.`;
+    } else {
+        aiProviderTestStatus.textContent = `Ready to test the saved ${provider.label} model and key.`;
+    }
+}
+
+function updateApiKeyStatus() {
     const indicator = apiStatusBadge.querySelector(".status-indicator");
     const text = apiStatusBadge.querySelector(".status-text");
+    const provider = selectedAIProviderMeta();
+    const hasKey = selectedAIKeyConfigured();
     
     if (hasKey) {
         indicator.className = "status-indicator green";
-        text.innerText = "Gemini API Key Active";
+        text.innerText = `${provider.label} Key Saved`;
     } else {
         indicator.className = "status-indicator red";
-        text.innerText = "Gemini API Key Missing";
+        text.innerText = `${provider.label} Key Missing`;
     }
 }
 
@@ -815,7 +877,16 @@ function updateSecretStatuses() {
         geminiKeyConfigured,
         "Gemini",
         "Saved locally. Leave this field blank to keep the current key, or enter a new key to replace it.",
-        "Required for AI matching and tailoring. The key is stored only on this machine.",
+        "Required when Google Gemini is selected. The key is stored only on this machine.",
+    );
+    updateSecretFieldStatus(
+        pOpenAIApiKey,
+        pOpenAIKeyStatus,
+        pOpenAIKeyHelp,
+        openAIKeyConfigured,
+        "OpenAI",
+        "Saved locally. Leave this field blank to keep the current key, or enter a new key to replace it.",
+        "Required when OpenAI is selected. The key is stored only on this machine.",
     );
     updateSecretFieldStatus(
         pGoogleApiKey,
@@ -826,11 +897,12 @@ function updateSecretStatuses() {
         "Saved locally. Leave this field blank to keep the current key, or enter a new key to replace it.",
         "Optional. Used by Google Places to resolve headquarters street addresses.",
     );
-    updateApiKeyStatus(geminiKeyConfigured);
+    updateApiKeyStatus();
+    updateProviderTestAvailability();
 }
 
 function markSecretStatusesUnavailable() {
-    [pGeminiKeyStatus, pGoogleKeyStatus].forEach(status => {
+    [pGeminiKeyStatus, pOpenAIKeyStatus, pGoogleKeyStatus].forEach(status => {
         status.className = "secret-key-status unavailable";
         status.textContent = "Status unavailable";
     });
@@ -842,11 +914,12 @@ function updateStartupActivity(profile) {
     if (!title || !description) return;
 
     const profileReady = !!(profile?.name && profile?.email && profile?.base_resume_text);
+    const provider = selectedAIProviderMeta();
     if (profileReady) {
         title.textContent = "Profile Loaded";
-        description.textContent = geminiKeyConfigured
+        description.textContent = selectedAIKeyConfigured()
             ? "Your saved profile is ready to search, tailor materials, and track applications."
-            : "Your saved profile is loaded. Add a Gemini API key when you are ready to match and tailor jobs.";
+            : `Your saved profile is loaded. Add a ${provider.label} API key when you are ready to match and tailor jobs.`;
     } else {
         title.textContent = "Profile Setup Needed";
         description.textContent = "Add your name, email, and base resume in Profile & Resume to get started.";
@@ -871,10 +944,15 @@ async function loadProfile() {
             pGithub.value = profile.github || "";
             pLinkedin.value = profile.linkedin || "";
             pWebsite.value = profile.website || "";
+            pAiProvider.value = profile.ai_provider || "gemini";
+            pAiModel.value = profile.ai_model || selectedAIProviderMeta().defaultModel;
             pApiKey.value = "";
+            pOpenAIApiKey.value = "";
             pGoogleApiKey.value = "";
             geminiKeyConfigured = !!profile.gemini_api_key_configured;
+            openAIKeyConfigured = !!profile.openai_api_key_configured;
             googleMapsKeyConfigured = !!profile.google_maps_api_key_configured;
+            aiProviderSettingsSaved = true;
             updateSecretStatuses();
             updateStartupActivity(profile);
             pResume.value = profile.base_resume_text || "";
@@ -910,6 +988,8 @@ async function saveProfile(e) {
         website: pWebsite.value.trim(),
         base_resume_text: pResume.value.trim(),
         resume_mode: pResumeMode.value,
+        ai_provider: selectedAIProvider(),
+        ai_model: pAiModel.value.trim(),
         prefer_us_headquarters: pPreferUsHeadquarters.checked
     };
     
@@ -924,6 +1004,7 @@ async function saveProfile(e) {
 
         const secretPayload = {};
         if (pApiKey.value.trim()) secretPayload.gemini_api_key = pApiKey.value.trim();
+        if (pOpenAIApiKey.value.trim()) secretPayload.openai_api_key = pOpenAIApiKey.value.trim();
         if (pGoogleApiKey.value.trim()) secretPayload.google_maps_api_key = pGoogleApiKey.value.trim();
         if (Object.keys(secretPayload).length) {
             const secretResponse = await fetch(`${API_URL}/api/profile/secrets`, {
@@ -934,15 +1015,19 @@ async function saveProfile(e) {
             const secretResult = await secretResponse.json();
             if (!secretResponse.ok) throw new Error(secretResult.detail || "Could not update API keys.");
             geminiKeyConfigured = !!secretResult.gemini_api_key_configured;
+            openAIKeyConfigured = !!secretResult.openai_api_key_configured;
             googleMapsKeyConfigured = !!secretResult.google_maps_api_key_configured;
             pApiKey.value = "";
+            pOpenAIApiKey.value = "";
             pGoogleApiKey.value = "";
         }
         
         if (result.success) {
             userDisplayName.innerText = payload.name || "Candidate";
+            aiProviderSettingsSaved = true;
             updateSecretStatuses();
-            logActivity("Profile Saved", "Contact details and API key configured.", "success");
+            updateStartupActivity(payload);
+            logActivity("Profile Saved", `Contact details and ${selectedAIProviderMeta().label} settings saved.`, "success");
             hideLoading();
             alert("Profile settings saved successfully!");
         }
@@ -950,6 +1035,37 @@ async function saveProfile(e) {
         hideLoading();
         console.error(err);
         logActivity("Profile Save Failed", "Error storing profile adjustments.", "error");
+    }
+}
+
+async function testSavedAIProvider() {
+    const provider = selectedAIProviderMeta();
+    const operation = showCancellableLoading(
+        `Testing ${provider.label}...`,
+        "Validating the saved key, selected model, and structured-output capability."
+    );
+    aiProviderTestStatus.className = "form-help full-width provider-test-status";
+    aiProviderTestStatus.textContent = `Testing the saved ${provider.label} configuration…`;
+    try {
+        const response = await fetch(`${API_URL}/api/profile/ai-provider/validate`, {
+            method: "POST",
+            headers: operationHeaders(operation)
+        });
+        const result = await response.json();
+        hideLoading();
+        if (result.cancelled) {
+            aiProviderTestStatus.textContent = result.message || "AI provider test stopped.";
+            return;
+        }
+        if (!response.ok) throw new Error(result.detail || "The AI provider test failed.");
+        aiProviderTestStatus.className = "form-help full-width provider-test-status success";
+        aiProviderTestStatus.textContent = `${result.message} Model: ${result.model}.`;
+        logActivity("AI Provider Ready", `${result.provider_label} model ${result.model} passed capability validation.`, "success");
+    } catch (error) {
+        hideLoading();
+        aiProviderTestStatus.className = "form-help full-width provider-test-status error";
+        aiProviderTestStatus.textContent = error.message || "The AI provider test failed.";
+        logActivity("AI Provider Test Failed", aiProviderTestStatus.textContent, "error");
     }
 }
 

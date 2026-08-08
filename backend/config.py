@@ -18,6 +18,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # API Keys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
 
 def get_gemini_api_key() -> str:
@@ -28,6 +29,11 @@ def get_gemini_api_key() -> str:
         str: The Gemini API key, or empty string if not configured.
     """
     return os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
+
+
+def get_openai_api_key() -> str:
+    """Return the optional OpenAI API key without exposing it to the browser."""
+    return os.environ.get("OPENAI_API_KEY") or OPENAI_API_KEY
 
 def get_google_maps_api_key() -> str:
     """
