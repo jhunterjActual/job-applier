@@ -16,6 +16,9 @@ from datetime import datetime
 MIN_MATCH_SCORE = 40
 MAX_JOB_DESCRIPTION_CHARS = 50_000
 MAX_LEVER_API_BYTES = 2 * 1024 * 1024
+MAX_SEARCH_RESPONSE_BYTES = 1 * 1024 * 1024
+MAX_PROVIDER_CANDIDATES = 25
+SEARCH_HTTP_TIMEOUT_SECONDS = 12
 TRACKING_QUERY_KEYS = {
     "fbclid", "gclid", "mc_cid", "mc_eid", "ref", "referrer", "source",
 }
@@ -54,10 +57,13 @@ def canonicalize_job_url(url: str) -> str:
         default_port = 443 if scheme == "https" else 80
         display_host = f"[{host}]" if ":" in host else host
         netloc = display_host if port in {None, default_port} else f"{display_host}:{port}"
-        path = "/" + "/".join(segment for segment in parsed.path.split("/") if segment)
+        path_segments = [segment for segment in parsed.path.split("/") if segment]
+        path = "/" + "/".join(path_segments)
         normalized_path = path.rstrip("/") or "/"
 
         provider = provider_for_url(urllib.parse.urlunsplit((scheme, netloc, normalized_path, "", "")))
+        if provider == "ashby" and len(path_segments) >= 3 and path_segments[-1].lower() == "application":
+            normalized_path = "/" + "/".join(path_segments[:-1])
         query = ""
         if provider == "unknown" and parsed.query:
             retained = [
@@ -481,6 +487,20 @@ def provider_alerts_from_health(provider_health: dict) -> list[dict]:
                 "code": "stale_postings",
                 "message": f"{provider.title()} skipped {reasons['stale']} posting(s) that are no longer published.",
             })
+        partial = health.get("partial_results", {})
+        if any(partial.values()) or health.get("candidate_budget_exhausted"):
+            causes = []
+            if partial.get("oversized_responses", 0):
+                causes.append("a search response exceeded the 1 MiB download limit")
+            if partial.get("candidate_limit_hits", 0) or health.get("candidate_budget_exhausted"):
+                causes.append(f"the {MAX_PROVIDER_CANDIDATES}-posting processing limit was reached")
+            if partial.get("timeouts", 0):
+                causes.append(f"a search request exceeded the {SEARCH_HTTP_TIMEOUT_SECONDS}-second timeout")
+            alerts.append({
+                "provider": provider,
+                "code": "partial_results",
+                "message": f"{provider.title()} returned partial results because {' and '.join(causes)}.",
+            })
     return alerts
 
 
@@ -495,6 +515,37 @@ def is_useful_job_details(details: dict) -> bool:
     if len(title) < 3 or len(title) > 180 or len(description) < 80:
         return False
     return not any(marker in combined for marker in INVALID_JOB_TEXT)
+
+
+def _bounded_job_details(details: dict) -> dict:
+    """Apply final retention limits before job details enter matching or storage."""
+    bounded = dict(details)
+    bounded["description"] = str(bounded.get("description") or "")[:MAX_JOB_DESCRIPTION_CHARS]
+    return bounded
+
+
+def _append_candidate_with_budget(
+    item: dict,
+    results: list,
+    seen_urls: set,
+    provider_candidate_counts: dict,
+    provider_health: dict,
+) -> bool:
+    """Append one canonical candidate unless its provider has reached the run-wide cap."""
+    url = canonicalize_job_url(item.get("url", ""))
+    if not url or url in seen_urls:
+        return False
+    provider = provider_for_url(url)
+    if provider in provider_candidate_counts:
+        if provider_candidate_counts[provider] >= MAX_PROVIDER_CANDIDATES:
+            provider_health[provider]["candidate_budget_exhausted"] = True
+            return False
+        provider_candidate_counts[provider] += 1
+        if provider_candidate_counts[provider] >= MAX_PROVIDER_CANDIDATES:
+            provider_health[provider]["candidate_budget_exhausted"] = True
+    seen_urls.add(url)
+    results.append({**item, "url": url})
+    return True
 
 
 def is_specific_job_url(url: str) -> bool:
@@ -560,6 +611,9 @@ def search_yahoo_jobs(keywords: str, location: str = "", diagnostics: dict | Non
     
     for domain in domains:
         provider = next(name for name, value in PROVIDER_DOMAINS.items() if value == domain)
+        health = diagnostics.get(provider) if diagnostics is not None else None
+        if health is not None and health.get("candidate_budget_exhausted"):
+            continue
         query = f"site:{domain} {keywords}"
         if location:
             query += f" {location}"
@@ -569,8 +623,13 @@ def search_yahoo_jobs(keywords: str, location: str = "", diagnostics: dict | Non
         
         req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req) as response:
-                html = response.read().decode('utf-8')
+            with urllib.request.urlopen(req, timeout=SEARCH_HTTP_TIMEOUT_SECONDS) as response:
+                payload = response.read(MAX_SEARCH_RESPONSE_BYTES + 1)
+                if len(payload) > MAX_SEARCH_RESPONSE_BYTES:
+                    if health is not None:
+                        health["partial_results"]["oversized_responses"] += 1
+                    payload = payload[:MAX_SEARCH_RESPONSE_BYTES]
+                html = payload.decode('utf-8', errors='replace')
                 
                 # Find all href links
                 found_links = re.findall(r'href="([^"]+)"', html)
@@ -584,12 +643,17 @@ def search_yahoo_jobs(keywords: str, location: str = "", diagnostics: dict | Non
                             decoded = urllib.parse.unquote(match.group(1))
                     
                     # Check for direct Lever, Greenhouse, Ashby, or SmartRecruiters job posting boards
-                    if any(d in decoded for d in ["boards.greenhouse.io", "job-boards.greenhouse.io", "jobs.lever.co", "jobs.eu.lever.co", "ashbyhq.com", "smartrecruiters.com"]):
-                        if "yahoo.com" not in decoded and "/embed/" not in decoded:
-                            if diagnostics is not None:
-                                diagnostics[provider]["raw_candidates"] += 1
-                            if is_specific_job_url(decoded):
-                                matching_urls.append(canonicalize_job_url(decoded))
+                    if provider_for_url(decoded) == provider and "yahoo.com" not in decoded and "/embed/" not in decoded:
+                        if health is not None:
+                            health["raw_candidates"] += 1
+                        if is_specific_job_url(decoded):
+                            canonical_url = canonicalize_job_url(decoded)
+                            if canonical_url and canonical_url not in matching_urls:
+                                if len(matching_urls) >= MAX_PROVIDER_CANDIDATES:
+                                    if health is not None:
+                                        health["partial_results"]["candidate_limit_hits"] += 1
+                                    break
+                                matching_urls.append(canonical_url)
                 
                 # Deduplicate and format results for this domain
                 for actual_url in matching_urls:
@@ -602,12 +666,23 @@ def search_yahoo_jobs(keywords: str, location: str = "", diagnostics: dict | Non
                             "url": actual_url,
                             "snippet": ""
                         })
-                        if diagnostics is not None:
-                            diagnostics[provider]["valid_discovered"] += 1
+                        if health is not None:
+                            health["valid_discovered"] += 1
+        except (TimeoutError, socket.timeout):
+            if health is not None:
+                health["partial_results"]["timeouts"] += 1
+        except urllib.error.URLError as e:
+            if isinstance(getattr(e, "reason", None), (TimeoutError, socket.timeout)):
+                if health is not None:
+                    health["partial_results"]["timeouts"] += 1
+            else:
+                print(f"Error during Yahoo search for {domain}: {e}")
+                if health is not None:
+                    health["errors"].append(type(e).__name__)
         except Exception as e:
             print(f"Error during Yahoo search for {domain}: {e}")
-            if diagnostics is not None:
-                diagnostics[provider]["errors"].append(str(e)[:200])
+            if health is not None:
+                health["errors"].append(type(e).__name__)
             
     return jobs
 
@@ -995,6 +1070,10 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
             "raw_candidates": 0, "valid_discovered": 0, "new_candidates": 0,
             "accepted": 0, "rejected": 0, "skipped_active": 0,
             "skipped_archived": 0, "errors": [], "api_fallbacks": 0,
+            "candidate_budget_exhausted": False,
+            "partial_results": {
+                "oversized_responses": 0, "candidate_limit_hits": 0, "timeouts": 0,
+            },
             "rejection_reasons": {
                 "stale": 0, "format_drift": 0, "access_challenge": 0,
                 "embedded_content": 0, "provider_error": 0,
@@ -1006,16 +1085,16 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
     # 4. Search Yahoo for matching Greenhouse/Lever postings
     results = []
     seen_urls = set()
+    provider_candidate_counts = {provider: 0 for provider in PROVIDER_DOMAINS}
     for kw in search_keywords:
         for loc in locs:
             loc_str = f" in '{loc}'" if loc else ""
             print(f"Crawling Yahoo jobs for keyword: '{kw}'{loc_str}...")
             kw_results = search_yahoo_jobs(kw, loc, provider_health)
             for item in kw_results:
-                url = canonicalize_job_url(item["url"])
-                if url not in seen_urls:
-                    seen_urls.add(url)
-                    results.append(item)
+                _append_candidate_with_budget(
+                    item, results, seen_urls, provider_candidate_counts, provider_health
+                )
     
     # 4. Scrape all job descriptions first
     scraped_jobs = []
@@ -1048,6 +1127,8 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
                 reason = reason if reason in provider_health[provider]["rejection_reasons"] else "provider_error"
                 provider_health[provider]["rejection_reasons"][reason] += 1
             continue
+
+        job_details = _bounded_job_details(job_details)
             
         scraped_jobs.append(job_details)
         known_urls[url] = "matched"
