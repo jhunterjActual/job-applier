@@ -51,7 +51,7 @@ The application features a **FastAPI backend** that doubles as a static file ser
 ## 🚀 Getting Started
 
 ### Prerequisites
-* Python 3.10 or higher.
+* Python 3.10.2 or higher.
 * Google Chrome or Chromium (installed automatically by Playwright).
 * A **Gemini API Key** (Get one free from [Google AI Studio](https://aistudio.google.com/)).
 * *Optional*: A Google Maps API Key with the **Places API** enabled.
@@ -76,7 +76,7 @@ We have provided automated startup scripts in the root directory:
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1
    ```
 
-The startup scripts will automatically set up a Python virtual environment, install requirements, download the browser binaries, start the FastAPI server, and open the dashboard in your default browser at:
+The startup scripts will automatically set up a Python virtual environment, install the reviewed hash-locked requirements, download the matching Playwright browser binaries, start the FastAPI server, and open the dashboard in your default browser at:
 👉 **[http://127.0.0.1:8001/](http://127.0.0.1:8001/)**
 
 Port `8001` is the default. To choose another port, run `.\run.ps1 -Port 9000` in PowerShell or `run.bat 9000` in Command Prompt.
@@ -94,7 +94,7 @@ If you prefer setting up manually or are on macOS/Linux:
    ```
 2. **Install Dependencies**:
    ```bash
-   pip install -r requirements.txt
+   python -m pip install --require-hashes -r requirements.txt
    ```
 3. **Install Playwright Browsers**:
    ```bash
@@ -166,4 +166,20 @@ Analytics capture is isolated from request handling and uses short network timeo
 
 ### Startup troubleshooting
 
-The Windows launchers validate the project virtual environment before opening the dashboard and repair it when a usable Python installation is available. Use `run.bat` when Windows execution policy blocks `.ps1` files. If the dashboard was already open during an unsuccessful launch, close that tab and launch again. The browser opens only after the expected backend build responds, and local UI assets are served without stale caching. If the configured port (default `8001`) is already occupied by an older copy, stop that terminal with Ctrl+C before relaunching.
+The Windows launchers validate the project virtual environment before opening the dashboard and repair it when a usable Python installation is available. They fingerprint `backend/requirements.in` and the hash-locked `backend/requirements.txt` and compare the installed application package manifest with the lock. A missing or changed fingerprint, wrong version, or unexpected package triggers a clean transactional virtual-environment rebuild, consistency check, and installation of the Chromium revision matching Playwright. The old environment is moved intact before the replacement is built at its final path and is restored automatically if setup fails. If Windows has the old environment locked, stop that copy with Ctrl+C and launch again.
+
+Use `run.bat` when Windows execution policy blocks `.ps1` files. If the dashboard was already open during an unsuccessful launch, close that tab and launch again. The browser opens only after the expected backend build responds, and local UI assets are served without stale caching. If the configured port (default `8001`) is already occupied by an older copy, stop that terminal with Ctrl+C before relaunching.
+
+### Updating dependencies
+
+`backend/requirements.in` is the human-reviewed direct dependency policy. `backend/requirements.txt` is the complete transitive lock and must not be edited by hand. Every locked distribution has an exact version and SHA-256 hashes, so fresh installations fail closed if an artifact does not match the reviewed lock.
+
+On Windows, update a direct version range in `requirements.in`, then regenerate and validate the lock from the repository root:
+
+```powershell
+.\scripts\update_dependencies.ps1
+```
+
+If local script policy blocks it, use the process-only alternative `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\update_dependencies.ps1`. The updater discovers the project environment or another usable Python 3.10.2+ installation; an explicit interpreter can still be supplied with `-Python`.
+
+The compiler is itself installed from `scripts/dependency-tools.txt`, a complete hash-locked toolchain containing pip 26.1.2, pip-tools 7.6.0, and the Python 3.10 TOML compatibility dependency. The updater uses disposable compiler and validation environments, installs the candidate application lock with `--require-hashes`, runs `pip check`, the P0 and analytics tests, and the syntax check, then atomically replaces the repository lock only after validation succeeds. Review the direct-policy change and both lock files before committing. GitHub installs both reviewed locks and tests the application on clean Windows Python 3.10 and 3.12 environments. Finally run a launcher once so the project environment and Playwright Chromium revision reconcile to the accepted lock.

@@ -1,0 +1,6 @@
+# Reviewed tooling used only to regenerate backend/requirements.txt.
+pip==26.1.2
+pip-tools==7.6.0
+# build and pip-tools need this TOML backport on Python 3.10. Keeping it
+# unconditional lets one reviewed tool lock cover every supported interpreter.
+tomli==2.4.1

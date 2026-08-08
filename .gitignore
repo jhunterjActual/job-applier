@@ -1,5 +1,6 @@
 # Virtual environments
 backend/venv/
+backend/.venv-previous-*/
 .venv/
 env/
 venv/
@@ -27,6 +28,10 @@ baseresume.md
 baseresume.*
 resume.*
 *.pdf
+
+# Interrupted atomic dependency-lock publication
+backend/.requirements.*.tmp
+backend/.requirements.*.bak
 
 
 # OS generated files

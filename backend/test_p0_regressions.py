@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -16,6 +18,13 @@ from fastapi.testclient import TestClient
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from materials import material_download_name, persist_cover_letter, resolve_output_file
 from database import get_db_connection
+from dependency_lock import (
+    dependency_fingerprint,
+    environment_matches_lock,
+    locked_requirements,
+    stamp_is_current,
+    write_stamp,
+)
 from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import job_url_fingerprint, record_job_suppression
 from searcher import (
@@ -212,7 +221,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.3", source)
+                self.assertIn("20260808.4", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -233,7 +242,8 @@ class FrontendStartupTests(unittest.TestCase):
 
         self.assertIn("[int]$Port = 8001", powershell_source)
         self.assertIn("--port $Port", powershell_source)
-        self.assertIn('set "PORT=8001"', batch_source)
+        self.assertIn('set "JOBAPPLIER_REQUESTED_PORT=8001"', batch_source)
+        self.assertIn('set "PORT=%JOBAPPLIER_REQUESTED_PORT%"', batch_source)
         self.assertIn("--port %PORT%", batch_source)
         self.assertNotIn("8000", powershell_source)
         self.assertNotIn("8000", batch_source)
@@ -335,6 +345,181 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn("updateStartupActivity(profile)", script_source)
         self.assertIn('title.textContent = "Profile Loaded"', script_source)
         self.assertIn('title.textContent = "Profile Setup Needed"', script_source)
+
+
+class DependencyLockTests(unittest.TestCase):
+    @staticmethod
+    def project_dir() -> Path:
+        return Path(__file__).parent.parent
+
+    def dependency_files(self) -> tuple[Path, Path]:
+        backend_dir = self.project_dir() / "backend"
+        policy = Path(os.environ.get("JOBAPPLIER_TEST_REQUIREMENTS_IN", backend_dir / "requirements.in"))
+        lock = Path(os.environ.get("JOBAPPLIER_TEST_REQUIREMENTS_LOCK", backend_dir / "requirements.txt"))
+        return policy, lock
+
+    def test_direct_dependency_policy_is_fully_hash_locked(self) -> None:
+        policy, lock = self.dependency_files()
+        direct_source = policy.read_text(encoding="utf-8")
+        lock_source = lock.read_text(encoding="utf-8")
+
+        direct_names = {
+            re.split(r"[<>=!~\[]", line, maxsplit=1)[0].strip().lower().replace("_", "-")
+            for line in direct_source.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        locked_blocks: dict[str, list[str]] = {}
+        current_name = None
+        for line in lock_source.splitlines():
+            match = re.match(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)\s*\\?$", line)
+            if match:
+                current_name = match.group(1).lower().replace("_", "-")
+                locked_blocks[current_name] = [line]
+            elif current_name:
+                locked_blocks[current_name].append(line)
+
+        self.assertEqual(
+            {
+                "exceptiongroup", "fastapi", "google-genai", "playwright", "posthog",
+                "pydantic", "python-multipart", "uvicorn",
+            },
+            direct_names,
+        )
+        self.assertTrue(direct_names.issubset(locked_blocks))
+        self.assertNotIn("jinja2", locked_blocks)
+        self.assertNotIn("duckduckgo-search", locked_blocks)
+        self.assertEqual("1.3.1", locked_requirements(lock)["exceptiongroup"])
+        for package, block in locked_blocks.items():
+            with self.subTest(package=package):
+                self.assertRegex(block[0], rf"^{re.escape(package)}==", msg=block[0].lower())
+                self.assertIn("--hash=sha256:", "\n".join(block))
+
+    def test_lock_rejects_mutable_or_remote_requirements(self) -> None:
+        _, application_lock = self.dependency_files()
+        tool_lock = self.project_dir() / "scripts" / "dependency-tools.txt"
+        for lock in (application_lock, tool_lock):
+            lock_source = lock.read_text(encoding="utf-8")
+            install_lines = [line.strip() for line in lock_source.splitlines() if line and not line[0].isspace() and not line.startswith("#")]
+            self.assertTrue(install_lines)
+            for line in install_lines:
+                with self.subTest(lock=lock.name, line=line):
+                    self.assertRegex(line, r"^[A-Za-z0-9_.-]+==[^\s\\]+\s*\\?$")
+                    self.assertNotRegex(line.lower(), r"(?:https?://|git\+|file:|\s@\s|^-e\s|\.\.[/\\])")
+
+    def test_dependency_compiler_is_fully_hash_locked(self) -> None:
+        tool_input = (self.project_dir() / "scripts" / "dependency-tools.in").read_text(encoding="utf-8")
+        tool_lock = self.project_dir() / "scripts" / "dependency-tools.txt"
+        self.assertEqual(
+            {"pip", "pip-tools", "tomli"},
+            {
+                re.split(r"[<>=!~\[]", line, maxsplit=1)[0].strip().lower()
+                for line in tool_input.splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            },
+        )
+        locked = locked_requirements(tool_lock)
+        self.assertEqual("26.1.2", locked["pip"])
+        self.assertEqual("7.6.0", locked["pip-tools"])
+        self.assertEqual("2.4.1", locked["tomli"])
+        tool_source = tool_lock.read_text(encoding="utf-8")
+        blocks: dict[str, list[str]] = {}
+        current_name = None
+        for line in tool_source.splitlines():
+            match = re.match(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)\s*\\?$", line)
+            if match:
+                current_name = match.group(1).lower().replace("_", "-")
+                blocks[current_name] = [line]
+            elif current_name:
+                blocks[current_name].append(line)
+        for package in locked:
+            self.assertIn("--hash=sha256:", "\n".join(blocks[package]))
+
+    def test_launchers_reconcile_and_stamp_the_reviewed_lock(self) -> None:
+        for launcher in ("run.bat", "run.ps1"):
+            with self.subTest(launcher=launcher):
+                source = (self.project_dir() / launcher).read_text(encoding="utf-8")
+                lower_source = source.lower()
+                self.assertIn("requirements.in", lower_source)
+                self.assertIn("requirements.txt", lower_source)
+                self.assertIn("dependency_lock.py", lower_source)
+                self.assertIn("--lock", lower_source)
+                self.assertIn("--require-hashes", lower_source)
+                self.assertIn("pip check", lower_source)
+                self.assertIn("playwright install chromium", lower_source)
+                self.assertNotIn("pip install --upgrade pip", lower_source)
+                self.assertLess(
+                    lower_source.index("playwright install chromium"),
+                    lower_source.index("write --stamp"),
+                )
+                self.assertIn(".venv-previous-", lower_source)
+                self.assertNotIn("venv --clear", lower_source)
+                self.assertLess(lower_source.index(".venv-previous-"), lower_source.index("-m venv"))
+                self.assertLess(lower_source.index("--require-hashes"), lower_source.index("write --stamp"))
+                self.assertLess(lower_source.index("write --stamp"), lower_source.index("environment repair complete"))
+                self.assertIn("stop any running job applier copy with ctrl+c", lower_source)
+        powershell_source = (self.project_dir() / "run.ps1").read_text(encoding="utf-8")
+        batch_source = (self.project_dir() / "run.bat").read_text(encoding="utf-8")
+        self.assertIn("(3, 10, 2)", powershell_source)
+        self.assertIn("(3, 10, 2)", batch_source)
+        self.assertIn("Start-Job", powershell_source)
+        self.assertNotIn("Start-ThreadJob", powershell_source)
+        self.assertIn("[int]::TryParse", batch_source)
+        self.assertIn("SERVER_EXIT", batch_source)
+
+    def test_environment_manifest_rejects_unlocked_or_wrong_packages(self) -> None:
+        _, lock = self.dependency_files()
+
+        class FakeDistribution:
+            def __init__(self, name: str, version: str):
+                self.metadata = {"Name": name}
+                self.version = version
+
+        expected = locked_requirements(lock)
+        exact = [FakeDistribution(name, version) for name, version in expected.items()]
+        self.assertTrue(environment_matches_lock(lock, exact + [FakeDistribution("pip", "1.0")]))
+        self.assertFalse(environment_matches_lock(lock, exact + [FakeDistribution("unreviewed", "1.0")]))
+        wrong = exact.copy()
+        wrong[0] = FakeDistribution(wrong[0].metadata["Name"], "0.0")
+        self.assertFalse(environment_matches_lock(lock, wrong))
+
+    def test_dependency_stamp_detects_policy_and_lock_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            policy = root / "requirements.in"
+            lock = root / "requirements.txt"
+            stamp = root / "venv" / ".jobapplier-requirements.sha256"
+            policy.write_text("fastapi~=0.137.0\n", encoding="utf-8")
+            lock.write_text("fastapi==0.137.2 \\\n    --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8")
+
+            self.assertFalse(stamp_is_current(stamp, [policy, lock]))
+            first_fingerprint = dependency_fingerprint([policy, lock])
+            write_stamp(stamp, [policy, lock])
+            self.assertTrue(stamp_is_current(stamp, [policy, lock]))
+            self.assertEqual(first_fingerprint, stamp.read_text(encoding="ascii").strip())
+
+            lock.write_text(lock.read_text(encoding="utf-8").replace("0.137.2", "0.137.3"), encoding="utf-8")
+            self.assertFalse(stamp_is_current(stamp, [policy, lock]))
+
+    def test_update_workflow_uses_clean_pinned_tooling_and_validation(self) -> None:
+        script = (self.project_dir() / "scripts" / "update_dependencies.ps1").read_text(encoding="utf-8")
+        self.assertIn("dependency-tools.txt", script)
+        self.assertIn("--only-binary=:all:", script)
+        self.assertIn("--generate-hashes", script)
+        self.assertIn("--require-hashes", script)
+        self.assertIn("test_p0_regressions.py", script)
+        self.assertIn("test_analytics.py", script)
+        self.assertIn("pip check", script)
+        self.assertIn("[IO.File]::Replace", script)
+        self.assertIn("Find-UpdatePython", script)
+
+    def test_clean_lock_ci_covers_supported_python_versions(self) -> None:
+        workflow = (self.project_dir() / ".github" / "workflows" / "dependency-tests.yml").read_text(encoding="utf-8")
+        self.assertIn('python-version: ["3.10", "3.12"]', workflow)
+        self.assertIn("dependency-tools.txt", workflow)
+        self.assertIn(".dependency-tools-venv", workflow)
+        self.assertIn("--require-hashes", workflow)
+        self.assertIn("test_p0_regressions.py", workflow)
+        self.assertIn("test_analytics.py", workflow)
 
 
 class ProfileSecretPresenceTests(unittest.TestCase):
