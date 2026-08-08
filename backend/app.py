@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -8,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 from datetime import date, datetime, timedelta
@@ -33,6 +34,7 @@ from maps_providers import (
     validate_maps_provider,
 )
 from application_insights import build_application_insights
+from data_export import build_user_data_export
 from database import get_db_connection
 from tailor import analyze_job_match, apply_resume_section_template, finalize_cover_letter, tailor_resume_and_cover_letter
 from searcher import (
@@ -89,7 +91,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.14"
+APP_BUILD = "20260808.15"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -1199,6 +1201,31 @@ def get_source_diagnostic_history(limit: int = 100) -> JSONResponse:
         return JSONResponse(history, headers={"Cache-Control": "no-store"})
     finally:
         conn.close()
+
+
+@app.get("/api/data-export")
+def export_user_data() -> StreamingResponse:
+    """Download an explicit local-data export without credentials or host paths."""
+    conn = get_db_connection()
+    try:
+        payload = build_user_data_export(
+            conn,
+            exported_at=datetime.now().isoformat(timespec="seconds"),
+            application_build=APP_BUILD,
+        )
+    finally:
+        conn.close()
+    filename = f"job-applier-user-data-{date.today().isoformat()}.json"
+    content = json.JSONEncoder(ensure_ascii=False, indent=2).iterencode(payload)
+    return StreamingResponse(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/api/source-diagnostics/export")

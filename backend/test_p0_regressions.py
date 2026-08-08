@@ -20,6 +20,7 @@ import operations as operations_module
 import searcher as searcher_module
 import source_diagnostics as source_diagnostics_module
 from application_insights import build_application_insights
+from data_export import EXPORT_FORMAT, EXPORT_SCHEMA_VERSION, build_user_data_export
 import pymupdf
 from docx import Document as WordDocument
 from fastapi.testclient import TestClient
@@ -854,12 +855,13 @@ class FrontendStartupTests(unittest.TestCase):
             "interview-prep-character-count", "generate-interview-prep-btn",
             "save-interview-prep-btn", "download-interview-prep-btn",
             "print-interview-prep-btn", "interview-prep-print",
+            "export-user-data-btn",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-14", html_source)
-        self.assertIn("index.css?v=20260808-14", html_source)
+        self.assertIn("app.js?v=20260808-15", html_source)
+        self.assertIn("index.css?v=20260808-15", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -867,7 +869,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.14", source)
+                self.assertIn("20260808.15", source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -1423,6 +1425,154 @@ class LocalBrowserBoundaryTests(unittest.TestCase):
             ).fetchone()
             connection.close()
             self.assertEqual(("Original resume", "existing"), stored)
+
+
+class UserDataExportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.database_path = Path(self.temp_dir.name) / "export.db"
+        connection = sqlite3.connect(self.database_path)
+        connection.executescript("""
+            CREATE TABLE profile (
+                id INTEGER PRIMARY KEY, name TEXT, email TEXT, base_resume_text TEXT,
+                suggested_keywords TEXT, ai_provider TEXT, ai_model TEXT, maps_provider TEXT,
+                prefer_us_headquarters INTEGER, resume_mode TEXT, active_base_resume_id INTEGER,
+                gemini_api_key TEXT, openai_api_key TEXT, google_maps_api_key TEXT
+            );
+            CREATE TABLE base_resumes (
+                id INTEGER PRIMARY KEY, name TEXT, resume_mode TEXT, content TEXT,
+                evidence_json TEXT, created_at TEXT, updated_at TEXT
+            );
+            CREATE TABLE base_resume_versions (
+                id INTEGER PRIMARY KEY, base_resume_id INTEGER, version_number INTEGER,
+                name TEXT, resume_mode TEXT, content TEXT, evidence_json TEXT, created_at TEXT
+            );
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY, title TEXT, company TEXT, description TEXT, url TEXT,
+                match_score INTEGER, status TEXT, is_expired INTEGER, source TEXT
+            );
+            CREATE TABLE saved_searches (
+                id INTEGER PRIMARY KEY, name TEXT, keywords TEXT, location TEXT,
+                created_at TEXT, schedule_frequency TEXT, enabled INTEGER
+            );
+            CREATE TABLE applications (
+                id INTEGER PRIMARY KEY, job_id INTEGER, company TEXT, position TEXT,
+                tailored_resume_path TEXT, cover_letter_path TEXT, tailored_resume_text TEXT,
+                cover_letter TEXT, status TEXT, submission_evidence TEXT, interview_prep TEXT
+            );
+            CREATE TABLE application_status_history (
+                id INTEGER PRIMARY KEY, job_id INTEGER, from_status TEXT, to_status TEXT,
+                changed_at TEXT, source TEXT, notes TEXT, undone_at TEXT
+            );
+            CREATE TABLE job_suppressions (
+                id INTEGER PRIMARY KEY, url_fingerprint TEXT, hostname TEXT, company TEXT,
+                title TEXT, deleted_at TEXT, deletion_source TEXT
+            );
+            CREATE TABLE source_diagnostics (
+                id INTEGER PRIMARY KEY, recorded_at TEXT, provider TEXT,
+                diagnostic_code TEXT, counters_json TEXT
+            );
+            CREATE TABLE headquarters_cache (
+                cache_key TEXT PRIMARY KEY, provider TEXT, address TEXT,
+                country_code TEXT, attribution TEXT, resolved_at TEXT
+            );
+            INSERT INTO profile VALUES (
+                1, 'Export Candidate', 'candidate@example.test', 'Legacy resume',
+                'analyst', 'openai', 'gpt-5-mini', 'openstreetmap', 1,
+                'general_professional', 10, 'gemini-secret', 'openai-secret', 'maps-secret'
+            );
+            INSERT INTO base_resumes VALUES (
+                10, 'Analyst', 'general_professional', 'Resume body',
+                '{"skills":"Analysis"}', '2026-08-01', '2026-08-02'
+            );
+            INSERT INTO base_resume_versions VALUES (
+                20, 10, 1, 'Analyst', 'general_professional', 'Resume v1',
+                '{"projects":"Migration"}', '2026-08-01'
+            );
+            INSERT INTO jobs VALUES (
+                30, 'Data Analyst', 'Example Co', 'Posting details',
+                'https://jobs.example.test/30', 88, 'applied', 0, 'manual'
+            );
+            INSERT INTO saved_searches VALUES (
+                40, 'Analyst jobs', 'data analyst', 'Dayton, OH', '2026-08-01', 'weekly', 1
+            );
+            INSERT INTO applications VALUES (
+                50, 30, 'Example Co', 'Data Analyst', 'C:/private/resume.pdf',
+                'C:/private/cover-letter.txt', 'Tailored resume', 'Cover letter', 'applied',
+                '{"confirmed_by_user":true}', 'Interview notes'
+            );
+            INSERT INTO application_status_history VALUES (
+                60, 30, 'matched', 'applied', '2026-08-03', 'manual', 'Applied online', NULL
+            );
+            INSERT INTO job_suppressions VALUES (
+                70, 'private-url-fingerprint', 'jobs.example.test', 'Other Co',
+                'Old Job', '2026-08-04', 'manual_delete'
+            );
+            INSERT INTO source_diagnostics VALUES (
+                80, '2026-08-05', 'lever', 'format_drift', '{"rejected":7}'
+            );
+            INSERT INTO headquarters_cache VALUES (
+                'private-cache-key', 'openstreetmap', 'Private cached address',
+                'us', 'provider', '2026-08-06'
+            );
+        """)
+        connection.commit()
+        connection.close()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def connection_factory(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.database_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def test_export_is_versioned_complete_and_excludes_credentials_and_host_details(self) -> None:
+        connection = self.connection_factory()
+        try:
+            payload = build_user_data_export(
+                connection,
+                exported_at="2026-08-08T12:00:00",
+                application_build="test-build",
+            )
+        finally:
+            connection.close()
+
+        self.assertEqual(EXPORT_FORMAT, payload["format"])
+        self.assertEqual(EXPORT_SCHEMA_VERSION, payload["schema_version"])
+        self.assertEqual(10, payload["profile"]["active_base_resume_id"])
+        self.assertTrue(payload["profile"]["prefer_us_headquarters"])
+        self.assertEqual({"skills": "Analysis"}, payload["base_resumes"][0]["professional_evidence"])
+        self.assertTrue(payload["applications"][0]["submission_evidence"]["confirmed_by_user"])
+        self.assertEqual({"rejected": 7}, payload["source_diagnostics"][0]["counters"])
+        self.assertEqual(1, payload["counts"]["jobs"])
+
+        encoded = json.dumps(payload)
+        for forbidden in (
+            "gemini-secret", "openai-secret", "maps-secret", "C:/private/resume.pdf",
+            "C:/private/cover-letter.txt", "private-url-fingerprint", "private-cache-key",
+            "Private cached address",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, encoded)
+
+    def test_export_endpoint_downloads_pretty_json_without_browser_caching(self) -> None:
+        client = TestClient(app_module.app, base_url="http://127.0.0.1:8001")
+        try:
+            with patch.object(app_module, "get_db_connection", side_effect=self.connection_factory):
+                response = client.get("/api/data-export")
+        finally:
+            client.close()
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(EXPORT_FORMAT, response.json()["format"])
+        self.assertEqual("no-store", response.headers["cache-control"])
+        self.assertEqual("nosniff", response.headers["x-content-type-options"])
+        self.assertRegex(
+            response.headers["content-disposition"],
+            r'^attachment; filename="job-applier-user-data-\d{4}-\d{2}-\d{2}\.json"$',
+        )
+        self.assertIn('\n  "schema_version": 1,', response.text)
 
 
 class ManualJobImportTests(unittest.TestCase):

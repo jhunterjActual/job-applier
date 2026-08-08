@@ -140,6 +140,7 @@ If you prefer setting up manually or are on macOS/Linux:
    - Scanned or image-only PDF pages are never sent to an AI provider by default. To use OCR, select **Allow my selected AI provider to OCR scanned PDF pages** before importing; only pages without readable embedded text are sent as images to the selected provider. Review the transcription before saving it.
    - Click **Save Settings**. Meaningful name, mode, or content changes create a new version; unchanged saves do not duplicate history.
    - Use **History** to preview earlier versions and restore one non-destructively. A restore becomes a new version, and the app prevents deletion of your last base resume.
+   - Use **Export My Data** to download a versioned JSON copy of your profile settings, resumes and history, jobs, applications, saved searches, deletion choices, and privacy-safe diagnostics. Stored API keys, generated-file paths, URL fingerprints, and provider caches are excluded. The file still contains personal data and should be kept private.
 2. **Search for Jobs**:
    - Go to the **Search & Match** tab.
    - Enter search keywords (e.g. `"Enterprise Architect"`) or leave blank to use keywords auto-suggested from your resume.
