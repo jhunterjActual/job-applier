@@ -56,6 +56,17 @@ const pGoogleKeyHelp = document.getElementById("p-google-key-help");
 const pResume = document.getElementById("p-resume");
 const pResumeMode = document.getElementById("p-resume-mode");
 const pResumeName = document.getElementById("p-resume-name");
+const professionalEvidenceEditor = document.getElementById("professional-evidence-editor");
+const professionalEvidenceCount = document.getElementById("professional-evidence-count");
+const evidenceModeGuidance = document.getElementById("evidence-mode-guidance");
+const professionalEvidenceFields = {
+    skills: document.getElementById("p-evidence-skills"),
+    projects: document.getElementById("p-evidence-projects"),
+    portfolio: document.getElementById("p-evidence-portfolio"),
+    licenses: document.getElementById("p-evidence-licenses"),
+    certifications: document.getElementById("p-evidence-certifications"),
+    work_samples: document.getElementById("p-evidence-work-samples")
+};
 const baseResumeSelect = document.getElementById("base-resume-select");
 const newBaseResumeBtn = document.getElementById("new-base-resume-btn");
 const duplicateBaseResumeBtn = document.getElementById("duplicate-base-resume-btn");
@@ -80,6 +91,19 @@ const AI_PROVIDERS = {
 const MAPS_PROVIDERS = {
     google: { label: "Google Places", requiresKey: true },
     openstreetmap: { label: "OpenStreetMap Nominatim", requiresKey: false }
+};
+
+const RESUME_EVIDENCE_GUIDANCE = {
+    it: "Prioritize technologies, architecture, delivery projects, repositories, technical certifications, and demonstrable work.",
+    technical_executive: "Prioritize leadership scope, transformation programs, board or advisory work, portfolios, and governance credentials.",
+    general_professional: "Prioritize transferable skills, relevant projects, credentials, and work samples that support the target role.",
+    federal: "Prioritize qualification evidence, detailed project scope, licenses, certifications, and work samples; include dates or hours only when known.",
+    healthcare: "Prioritize active licenses, clinical or operational skills, compliance credentials, quality projects, and relevant work samples.",
+    education: "Prioritize teaching credentials, curriculum projects, publications, lesson or course samples, research, and service.",
+    sales: "Prioritize sales methods, territory or product projects, certifications, presentations, case studies, and verified portfolio outcomes.",
+    trades_operations: "Prioritize trade licenses, safety certifications, equipment skills, completed projects, and photos or other work samples.",
+    academic_cv: "Prioritize research skills, projects, publications, portfolios, credentials, datasets, talks, and other scholarly work samples.",
+    cover_letter: "Prioritize the strongest skills, projects, credentials, and work samples that support a specific application narrative."
 };
 
 // Search Form Elements
@@ -221,6 +245,8 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(testMapsProviderBtn, "click", testSavedMapsProvider);
     bindEvent(resumeFileUpload, "change", handleResumeUpload);
     bindEvent(pResume, "input", updateBaseResumeActions);
+    bindEvent(pResumeMode, "change", updateProfessionalEvidenceSummary);
+    Object.values(professionalEvidenceFields).forEach(field => bindEvent(field, "input", updateProfessionalEvidenceSummary));
     bindEvent(baseResumeSelect, "change", selectBaseResume);
     bindEvent(newBaseResumeBtn, "click", startNewBaseResume);
     bindEvent(duplicateBaseResumeBtn, "click", beginBaseResumeCopy);
@@ -1093,6 +1119,45 @@ async function loadProfile() {
     }
 }
 
+function readProfessionalEvidence() {
+    return Object.fromEntries(
+        Object.entries(professionalEvidenceFields).map(([field, control]) => [field, control?.value.trim() || ""])
+    );
+}
+
+function setProfessionalEvidence(evidence = {}) {
+    Object.entries(professionalEvidenceFields).forEach(([field, control]) => {
+        if (control) control.value = evidence?.[field] || "";
+    });
+    updateProfessionalEvidenceSummary();
+}
+
+function updateProfessionalEvidenceSummary() {
+    const count = Object.values(readProfessionalEvidence()).filter(Boolean).length;
+    if (professionalEvidenceCount) {
+        professionalEvidenceCount.hidden = count === 0;
+        professionalEvidenceCount.textContent = `${count} section${count === 1 ? "" : "s"}`;
+    }
+    if (evidenceModeGuidance) {
+        evidenceModeGuidance.textContent = RESUME_EVIDENCE_GUIDANCE[pResumeMode?.value]
+            || RESUME_EVIDENCE_GUIDANCE.general_professional;
+    }
+    professionalEvidenceEditor?.classList.toggle("has-evidence", count > 0);
+    updateBaseResumeActions();
+}
+
+function professionalEvidencePreview(evidence = {}) {
+    const labels = {
+        skills: "SKILLS", projects: "PROJECTS", portfolio: "PORTFOLIO LINKS",
+        licenses: "PROFESSIONAL LICENSES", certifications: "CERTIFICATIONS",
+        work_samples: "WORK SAMPLES"
+    };
+    const sections = Object.entries(evidence)
+        .filter(([, value]) => String(value || "").trim())
+        .map(([field, value]) => `${labels[field] || field.toUpperCase()}\n${String(value).trim()}`);
+    return sections.join("\n\n");
+}
+
 // Save Candidate Profile
 async function saveProfile(e) {
     e.preventDefault();
@@ -1113,6 +1178,7 @@ async function saveProfile(e) {
         base_resume_id: currentBaseResumeId,
         base_resume_name: pResumeName.value.trim() || "Primary Resume",
         base_resume_text: pResume.value.trim(),
+        professional_evidence: readProfessionalEvidence(),
         resume_mode: pResumeMode.value,
         ai_provider: selectedAIProvider(),
         ai_model: pAiModel.value.trim(),
@@ -1177,7 +1243,8 @@ function baseResumeEditorState() {
         id: currentBaseResumeId,
         name: pResumeName.value.trim(),
         resume_mode: pResumeMode.value,
-        content: pResume.value.trim()
+        content: pResume.value.trim(),
+        professional_evidence: readProfessionalEvidence()
     };
 }
 
@@ -1206,6 +1273,7 @@ async function loadBaseResumeLibrary(preferredId = null) {
         baseResumeSelect.add(option);
         currentBaseResumeId = null;
         pResumeName.value = pResumeName.value || "Primary Resume";
+        setProfessionalEvidence();
         rememberBaseResumeSnapshot();
         updateBaseResumeActions();
         return;
@@ -1235,6 +1303,7 @@ async function loadBaseResumeDetails(resumeId, activate = false) {
     pResumeName.value = resume.name;
     pResumeMode.value = resume.resume_mode;
     pResume.value = resume.content;
+    setProfessionalEvidence(resume.professional_evidence);
     rememberBaseResumeSnapshot();
     updateBaseResumeActions();
 }
@@ -1266,6 +1335,7 @@ function startNewBaseResume() {
     pResumeName.value = "New Resume";
     pResumeMode.value = "general_professional";
     pResume.value = "";
+    setProfessionalEvidence();
     baseResumeSnapshot = "__unsaved_new_resume__";
     updateBaseResumeActions();
     pResumeName.focus();
@@ -1316,7 +1386,10 @@ async function showBaseResumeHistory() {
             const button = createElement("button", "resume-version-item");
             button.type = "button";
             button.appendChild(createElement("strong", "", `Version ${version.version_number} · ${version.name}`));
-            button.appendChild(createElement("span", "", `${new Date(version.created_at).toLocaleString()} · ${version.character_count.toLocaleString()} characters`));
+            const evidenceSummary = version.evidence_section_count
+                ? ` · ${version.evidence_section_count} evidence section${version.evidence_section_count === 1 ? "" : "s"}`
+                : "";
+            button.appendChild(createElement("span", "", `${new Date(version.created_at).toLocaleString()} · ${version.character_count.toLocaleString()} characters${evidenceSummary}`));
             button.addEventListener("click", () => previewBaseResumeVersion(version.version_number, button));
             baseResumeVersionList.appendChild(button);
         });
@@ -1337,7 +1410,10 @@ async function previewBaseResumeVersion(versionNumber, button) {
     button.classList.add("selected");
     selectedBaseResumeVersion = versionNumber;
     baseResumeVersionPreviewTitle.textContent = `Version ${versionNumber} · ${version.name}`;
-    baseResumeVersionPreviewContent.textContent = version.content;
+    const evidencePreview = professionalEvidencePreview(version.professional_evidence);
+    baseResumeVersionPreviewContent.textContent = evidencePreview
+        ? `${version.content}\n\nROLE-SPECIFIC PROFESSIONAL EVIDENCE\n\n${evidencePreview}`
+        : version.content;
     restoreBaseResumeVersionBtn.disabled = false;
 }
 

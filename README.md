@@ -44,6 +44,10 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Narrows the saved-job list by pay or contract rate, employment type, remote/hybrid/on-site arrangement, shift and on-call expectations, travel, sponsorship, clearance, professional license, and physical/outdoor work signals.
    - Derives filter signals locally with deterministic text rules. Unspecified details remain included by default, and filtering does not change match scores or send posting details to an AI provider.
 
+8. **Role-Specific Professional Evidence**:
+   - Stores skills, projects, portfolio links, licenses, certifications, and work samples with each named base resume, including its non-destructive version history.
+   - Provides guidance for each resume mode and sends only the candidate's entered evidence to the selected AI provider during user-triggered tailoring. Missing issuers, dates, outcomes, metrics, or credential status must not be inferred.
+
 ---
 
 ## 🛠️ Architecture
