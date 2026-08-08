@@ -51,7 +51,7 @@ echo Launching FastAPI Backend...
 echo Access the Dashboard at http://127.0.0.1:%PORT%/
 echo Press Ctrl+C to shut down the agent.
 
-start "" /b powershell -NoProfile -WindowStyle Hidden -Command "$ready=$false; 1..30 | ForEach-Object { if (-not $ready) { Start-Sleep 1; try { $v=Invoke-RestMethod 'http://127.0.0.1:%PORT%/api/version' -TimeoutSec 1; if ($v.build -eq '20260808.2') { $ready=$true; Start-Process 'http://127.0.0.1:%PORT%/?build=20260808.2' } } catch {} } }"
+start "" /b powershell -NoProfile -WindowStyle Hidden -Command "$ready=$false; 1..30 | ForEach-Object { if (-not $ready) { Start-Sleep 1; try { $v=Invoke-RestMethod 'http://127.0.0.1:%PORT%/api/version' -TimeoutSec 1; if ($v.build -eq '20260808.3') { $ready=$true; Start-Process 'http://127.0.0.1:%PORT%/?build=20260808.3' } } catch {} } }"
 "%VENV_PYTHON%" -m uvicorn app:app --host 127.0.0.1 --port %PORT% --reload
 pause
 exit /b

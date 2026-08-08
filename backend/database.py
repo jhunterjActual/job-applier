@@ -138,6 +138,19 @@ def init_db() -> None:
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_job_suppressions_deleted_at ON job_suppressions(deleted_at DESC)"
     )
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS source_diagnostics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recorded_at TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        diagnostic_code TEXT NOT NULL,
+        counters_json TEXT NOT NULL
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_source_diagnostics_recorded_at ON source_diagnostics(recorded_at DESC)"
+    )
     
     # Check and add suggested_keywords column if it doesn't exist
     _add_column_if_missing(cursor, "profile", "suggested_keywords", "TEXT DEFAULT ''")

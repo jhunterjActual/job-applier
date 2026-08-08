@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-2">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-3">
 </head>
 <body>
     <div class="app-container">
@@ -276,8 +276,15 @@
                     </div>
                 </div>
 
+                <div class="source-diagnostics-toolbar">
+                    <button type="button" class="btn btn-secondary btn-sm" id="open-source-diagnostics-btn">
+                        <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
+                        Source diagnostics
+                        <span class="cleanup-count-badge" id="source-diagnostics-count" hidden>0</span>
+                    </button>
+                </div>
                 <div class="provider-alerts" id="saved-search-alerts" hidden></div>
-                <div class="provider-alerts" id="provider-alerts" hidden></div>
+                <div class="provider-alerts" id="provider-alerts" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 
                 <!-- Job Match Results Table -->
                 <div class="card">
@@ -460,6 +467,34 @@
                     </div>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Source Diagnostic History -->
+    <div class="modal" id="source-diagnostics-modal" role="dialog" aria-modal="true" aria-labelledby="source-diagnostics-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="source-diagnostics-title">Source Diagnostic History</h2>
+                <button type="button" class="close-modal-btn" id="close-source-diagnostics-modal" aria-label="Close source diagnostic history"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted margin-bottom-md">
+                    Local troubleshooting history contains only timestamps, provider names, diagnostic codes, and bounded aggregate counters. It excludes searches, URLs, job details, resumes, credentials, and raw errors.
+                </p>
+                <p class="text-muted" id="source-diagnostics-empty">No source diagnostics have been recorded.</p>
+                <ul class="source-diagnostics-list" id="source-diagnostics-list"></ul>
+            </div>
+            <div class="modal-footer source-diagnostics-footer">
+                <button type="button" class="btn btn-secondary" id="clear-source-diagnostics-btn" disabled>
+                    <i class="fa-solid fa-trash" aria-hidden="true"></i> Clear history
+                </button>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="close-source-diagnostics-modal-btn">Close</button>
+                    <a class="btn btn-primary" id="export-source-diagnostics-btn" href="/api/source-diagnostics/export" download hidden>
+                        <i class="fa-solid fa-download" aria-hidden="true"></i> Export JSON
+                    </a>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -671,6 +706,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-2"></script>
+    <script src="/static/app.js?v=20260808-3"></script>
 </body>
 </html>
