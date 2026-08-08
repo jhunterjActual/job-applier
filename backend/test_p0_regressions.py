@@ -8,10 +8,12 @@ import json
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 import app as app_module
 import database as database_module
 import materials as materials_module
+import operations as operations_module
 import searcher as searcher_module
 import source_diagnostics as source_diagnostics_module
 from fastapi.testclient import TestClient
@@ -55,6 +57,22 @@ from tailor import (
 from utils import _headquarters_query, _looks_like_us_address, find_us_headquarters, markdown_to_html
 
 
+class OperationCancellationTests(unittest.TestCase):
+    def test_registered_operation_stops_at_checkpoint_and_cleans_temporary_file(self) -> None:
+        operation_id = str(uuid4())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temporary_file = Path(temp_dir) / "staged.pdf"
+            temporary_file.write_bytes(b"staged")
+            token = operations_module.start_operation(operation_id)
+            token.track_temporary_file(temporary_file)
+            self.assertTrue(operations_module.request_cancellation(operation_id))
+            with self.assertRaises(operations_module.OperationCancelled):
+                token.checkpoint()
+            operations_module.finish_operation(token)
+            self.assertFalse(temporary_file.exists())
+            self.assertFalse(operations_module.request_cancellation(operation_id))
+
+
 class ApplicationMaterialsSafetyTests(unittest.TestCase):
     def test_cover_letter_is_persisted_separately_as_utf8_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -75,6 +93,68 @@ class ApplicationMaterialsSafetyTests(unittest.TestCase):
         self.assertEqual("example-corp-vp-data-ai-cover-letter.txt", filename)
         self.assertNotIn("/", filename)
 
+    def test_stopped_pdf_regeneration_preserves_previous_materials(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database_path = root / "materials.db"
+            resume_path = root / "tailored_resume_1.pdf"
+            cover_path = root / "cover_letter_1.txt"
+            resume_path.write_bytes(b"old pdf")
+            cover_path.write_text("Old letter\n", encoding="utf-8")
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE profile (id INTEGER PRIMARY KEY, resume_mode TEXT);
+                CREATE TABLE applications (
+                    id INTEGER PRIMARY KEY, job_id INTEGER, tailored_resume_text TEXT,
+                    tailored_resume_path TEXT, cover_letter_path TEXT, cover_letter TEXT
+                );
+                INSERT INTO profile VALUES (1, 'general_professional');
+            """)
+            connection.execute(
+                "INSERT INTO applications VALUES (1, 1, ?, ?, ?, ?)",
+                ("Old resume", str(resume_path), str(cover_path), "Old letter"),
+            )
+            connection.commit()
+            connection.close()
+
+            def connection_factory():
+                database = sqlite3.connect(database_path)
+                database.row_factory = sqlite3.Row
+                return database
+
+            operation_id = str(uuid4())
+
+            def stop_after_render(markdown, output_path, max_pages=2):
+                Path(output_path).write_bytes(b"new staged pdf")
+                self.assertTrue(app_module.cancel_operation(operation_id)["active"])
+                return {"page_count": 1, "compact": False}
+
+            with (
+                patch.object(app_module, "get_db_connection", side_effect=connection_factory),
+                patch.object(app_module.config, "OUTPUT_DIR", str(root)),
+                patch.object(app_module, "apply_resume_section_template", side_effect=lambda text, mode: text),
+                patch.object(app_module, "finalize_cover_letter", return_value="New letter"),
+                patch.object(app_module, "generate_resume_pdf", side_effect=stop_after_render),
+            ):
+                result = app_module.update_tailored_details(
+                    1,
+                    app_module.MaterialsUpdateRequest(
+                        tailored_resume="New resume",
+                        cover_letter="New letter",
+                    ),
+                    operation_id,
+                )
+
+            self.assertTrue(result["cancelled"])
+            self.assertEqual(b"old pdf", resume_path.read_bytes())
+            self.assertEqual("Old letter\n", cover_path.read_text(encoding="utf-8"))
+            connection = connection_factory()
+            stored = connection.execute(
+                "SELECT tailored_resume_text, cover_letter FROM applications WHERE job_id = 1"
+            ).fetchone()
+            connection.close()
+            self.assertEqual("Old resume", stored["tailored_resume_text"])
+            self.assertEqual("Old letter", stored["cover_letter"])
     def test_cover_letter_date_placeholders_are_resolved(self) -> None:
         expected = "August 3, 2026"
         for placeholder in ("[Date]", "{DATE}", "<date>"):
@@ -208,12 +288,13 @@ class FrontendStartupTests(unittest.TestCase):
             "source-diagnostics-modal", "source-diagnostics-list",
             "source-diagnostics-empty", "clear-source-diagnostics-btn",
             "export-source-diagnostics-btn",
+            "loading-actions", "stop-loading-btn",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260808-3", html_source)
-        self.assertIn("index.css?v=20260808-3", html_source)
+        self.assertIn("app.js?v=20260808-4", html_source)
+        self.assertIn("index.css?v=20260808-4", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -221,7 +302,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.4", source)
+                self.assertIn("20260808.5", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -315,6 +396,9 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn("/api/jobs/import", script_source)
         self.assertIn('job.match_score === null', script_source)
         self.assertIn('"Unscored"', script_source)
+        self.assertIn("showCancellableLoading", script_source)
+        self.assertIn("revealJobId", script_source)
+        self.assertIn("job-row-revealed", script_source)
 
     def test_expected_search_limits_render_as_informational_notes(self) -> None:
         script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
@@ -732,6 +816,36 @@ class ManualJobImportTests(unittest.TestCase):
         self.assertEqual("https://example.test/jobs/123", stored["url"])
         self.assertEqual("example.test", stored["source"])
         self.assertEqual("matched", stored["status"])
+
+    def test_stopped_post_save_analysis_preserves_unscored_job(self) -> None:
+        operation_id = str(uuid4())
+        request = app_module.ManualJobSaveRequest(
+            url="https://example.test/jobs/stop-analysis", title="Data Director",
+            company="Example Health",
+            description="Lead enterprise data strategy and analytics. " * 3,
+        )
+
+        def stop_during_match(*args, cancel_check=None, **kwargs):
+            self.assertTrue(app_module.cancel_operation(operation_id)["active"])
+            cancel_check()
+
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "analyze_job_match", side_effect=stop_during_match),
+        ):
+            result = app_module.save_manual_job(request, operation_id)
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["cancelled"])
+        self.assertTrue(result["saved"])
+        connection = self.connection_factory()
+        stored = connection.execute(
+            "SELECT match_score, match_analysis FROM jobs WHERE id = ?", (result["job_id"],)
+        ).fetchone()
+        connection.close()
+        self.assertIsNone(stored["match_score"])
+        self.assertIn("not been completed", stored["match_analysis"])
 
     def test_duplicate_is_reported_before_scraping(self) -> None:
         connection = self.connection_factory()

@@ -5,6 +5,8 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 from config import get_gemini_api_key
+from operations import OperationCancelled
+from typing import Callable
 
 
 class TailoringResponse(BaseModel):
@@ -155,7 +157,15 @@ def apply_resume_section_template(markdown: str, resume_mode: str) -> str:
     return "\n\n".join(([preamble] if preamble else []) + sections).strip()
 
 
-def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, company_name: str, job_description: str, api_key: str = None, resume_mode: str = "general_professional") -> dict:
+def tailor_resume_and_cover_letter(
+    base_resume_text: str,
+    job_title: str,
+    company_name: str,
+    job_description: str,
+    api_key: str = None,
+    resume_mode: str = "general_professional",
+    cancel_check: Callable[[], None] | None = None,
+) -> dict:
     """
     Consolidates resume tailoring and cover letter drafting into a single Gemini request
     to conserve daily API limits, returning the customized materials as JSON.
@@ -170,6 +180,8 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
     Returns:
         dict: A dictionary containing success status, tailored resume, and cover letter text.
     """
+    if cancel_check:
+        cancel_check()
     try:
         client = get_client(api_key)
     except Exception as e:
@@ -216,6 +228,8 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
     """
 
     try:
+        if cancel_check:
+            cancel_check()
         # Use gemini-2.5-flash for speed and efficiency
         response = client.models.generate_content(
             model='gemini-2.5-flash',
@@ -225,6 +239,8 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
                 response_schema=TailoringResponse,
             )
         )
+        if cancel_check:
+            cancel_check()
         
         res_data = _structured_response_data(response, TailoringResponse)
         tailored_resume = res_data.get("tailored_resume", "").strip()
@@ -245,13 +261,22 @@ def tailor_resume_and_cover_letter(base_resume_text: str, job_title: str, compan
             "tailored_resume": tailored_resume,
             "cover_letter": cover_letter
         }
+    except OperationCancelled:
+        raise
     except Exception as e:
         return {
             "success": False,
             "error": f"Failed to call Gemini API: {str(e)}"
         }
 
-def analyze_job_match(base_resume_text: str, job_title: str, company_name: str, job_description: str, api_key: str = None) -> dict:
+def analyze_job_match(
+    base_resume_text: str,
+    job_title: str,
+    company_name: str,
+    job_description: str,
+    api_key: str = None,
+    cancel_check: Callable[[], None] | None = None,
+) -> dict:
     """
     Analyzes how well the candidate's resume matches a single job description
     and returns a match score and structural analysis.
@@ -266,6 +291,8 @@ def analyze_job_match(base_resume_text: str, job_title: str, company_name: str, 
     Returns:
         dict: A dictionary containing success status, match score, and analysis markdown.
     """
+    if cancel_check:
+        cancel_check()
     try:
         client = get_client(api_key)
     except Exception as e:
@@ -294,6 +321,8 @@ def analyze_job_match(base_resume_text: str, job_title: str, company_name: str, 
     """
     
     try:
+        if cancel_check:
+            cancel_check()
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
@@ -302,12 +331,16 @@ def analyze_job_match(base_resume_text: str, job_title: str, company_name: str, 
                 response_schema=JobMatchResponse,
             ),
         )
+        if cancel_check:
+            cancel_check()
         data = _structured_response_data(response, JobMatchResponse)
         return {
             "success": True,
             "match_score": data.get("match_score", 50),
             "match_analysis": data.get("match_analysis", "No analysis provided.")
         }
+    except OperationCancelled:
+        raise
     except Exception as e:
         return {
             "success": False,

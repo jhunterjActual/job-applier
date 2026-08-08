@@ -14,6 +14,7 @@ let googleMapsKeyConfigured = false;
 let loadedJobs = [];
 let jobImportCanonicalUrl = null;
 let sourceDiagnosticsOpener = null;
+let activeLoadingOperation = null;
 
 // DOM Elements
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -101,6 +102,8 @@ const openManualApplicationBtn = document.getElementById("open-manual-applicatio
 const loadingModal = document.getElementById("loading-modal");
 const loadingTitle = document.getElementById("loading-title");
 const loadingSubtitle = document.getElementById("loading-subtitle");
+const loadingActions = document.getElementById("loading-actions");
+const stopLoadingBtn = document.getElementById("stop-loading-btn");
 
 const cleanupModal = document.getElementById("cleanup-modal");
 const closeCleanupModalBtns = [
@@ -178,6 +181,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(jobMinScore, "change", renderFilteredJobs);
     bindEvent(jobStatusFilter, "change", renderFilteredJobs);
     bindEvent(jobSortOrder, "change", renderFilteredJobs);
+    bindEvent(stopLoadingBtn, "click", stopActiveLoadingOperation);
 
     loadProfile();
     loadSavedSearches();
@@ -423,14 +427,66 @@ function setupModalTabs() {
 }
 
 // Show/Hide Helpers
-function showLoading(title, subtitle = "Please wait while JobApplier prepares your request.") {
+function showLoading(title, subtitle = "Please wait while JobApplier prepares your request.", operation = null) {
     loadingTitle.innerText = title;
     loadingSubtitle.innerText = subtitle;
+    activeLoadingOperation = operation;
+    loadingActions.hidden = !operation;
+    stopLoadingBtn.disabled = false;
+    stopLoadingBtn.replaceChildren(
+        createElement("i", "fa-solid fa-stop"),
+        document.createTextNode(" Stop")
+    );
     loadingModal.classList.add("active");
 }
 
 function hideLoading() {
     loadingModal.classList.remove("active");
+    loadingActions.hidden = true;
+    activeLoadingOperation = null;
+}
+
+function showCancellableLoading(title, subtitle) {
+    const operation = {
+        id: crypto.randomUUID(),
+        stopRequested: false
+    };
+    showLoading(title, subtitle, operation);
+    return operation;
+}
+
+function operationHeaders(operation, headers = {}) {
+    return { ...headers, "X-JobApplier-Operation": operation.id };
+}
+
+async function stopActiveLoadingOperation() {
+    const operation = activeLoadingOperation;
+    if (!operation || operation.stopRequested) return;
+    operation.stopRequested = true;
+    stopLoadingBtn.disabled = true;
+    stopLoadingBtn.replaceChildren(
+        createElement("i", "fa-solid fa-spinner fa-spin"),
+        document.createTextNode(" Stopping...")
+    );
+    loadingTitle.innerText = "Stopping...";
+    loadingSubtitle.innerText = "Finishing the current step, then stopping without discarding completed work.";
+    try {
+        const response = await fetch(`${API_URL}/api/operations/${operation.id}/cancel`, { method: "POST" });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "The stop request could not be sent.");
+        if (!result.active && activeLoadingOperation === operation) {
+            loadingSubtitle.innerText = "The operation has already finished. Finalizing the result...";
+        }
+    } catch (error) {
+        operation.stopRequested = false;
+        stopLoadingBtn.disabled = false;
+        stopLoadingBtn.replaceChildren(
+            createElement("i", "fa-solid fa-stop"),
+            document.createTextNode(" Stop")
+        );
+        loadingTitle.innerText = "Still working...";
+        loadingSubtitle.innerText = error.message || "The stop request could not be sent.";
+    }
 }
 
 function showTailorModal(resumeMarkdown, coverLetterText, jobId) {
@@ -487,16 +543,20 @@ async function previewJobImport() {
         jobImportUrl.reportValidity();
         return;
     }
-    showLoading("Previewing Job Posting...", "Validating the public URL and extracting available job details.");
+    const operation = showCancellableLoading("Previewing Job Posting...", "Validating the public URL and extracting available job details.");
     try {
         const response = await fetch(`${API_URL}/api/jobs/import/preview`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: operationHeaders(operation, { "Content-Type": "application/json" }),
             body: JSON.stringify({ url })
         });
         const result = await response.json();
         hideLoading();
         if (!response.ok) throw new Error(result.detail || "Could not preview this posting.");
+        if (result.cancelled) {
+            showJobImportMessage(result.message || "Preview stopped.", true);
+            return;
+        }
         if (result.duplicate) {
             const existing = result.existing_job || {};
             jobImportCanonicalUrl = null;
@@ -540,11 +600,11 @@ async function previewJobImport() {
 async function saveJobImport(event) {
     event.preventDefault();
     if (!jobImportCanonicalUrl || !jobImportForm.reportValidity()) return;
-    showLoading("Saving Job Posting...", "Saving the reviewed details and analyzing the match when AI is configured.");
+    const operation = showCancellableLoading("Saving Job Posting...", "Saving the reviewed details and analyzing the match when AI is configured.");
     try {
         const response = await fetch(`${API_URL}/api/jobs/import`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: operationHeaders(operation, { "Content-Type": "application/json" }),
             body: JSON.stringify({
                 url: jobImportCanonicalUrl,
                 company: jobImportCompany.value.trim(),
@@ -559,10 +619,18 @@ async function saveJobImport(event) {
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || "Could not save this posting.");
         hideLoading();
+        if (result.cancelled && !result.saved) {
+            showJobImportMessage(result.message || "Job import stopped.", true);
+            return;
+        }
         hideJobImportModal();
-        await Promise.all([loadJobs(), updateDashboardStats()]);
+        const [viewChange] = await Promise.all([
+            loadJobs({ revealJobId: result.job_id }),
+            updateDashboardStats()
+        ]);
         logActivity("Job Imported", `Saved manually added job #${result.job_id}.`, "success");
-        alert(result.message);
+        const viewMessage = viewChange ? `\n\n${viewChange}` : "";
+        alert(`${result.message}${viewMessage}`);
     } catch (error) {
         hideLoading();
         showJobImportMessage(error.message, true);
@@ -890,7 +958,7 @@ async function handleResumeUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
     
-    showLoading("Parsing Resume File...", `Reading ${file.name}`);
+    const operation = showCancellableLoading("Parsing Resume File...", `Reading ${file.name}`);
     
     const formData = new FormData();
     formData.append("file", file);
@@ -898,11 +966,14 @@ async function handleResumeUpload(e) {
     try {
         const res = await fetch(`${API_URL}/api/profile/upload-resume`, {
             method: "POST",
+            headers: operationHeaders(operation),
             body: formData
         });
         
         const result = await res.json();
-        if (result.success) {
+        if (result.cancelled) {
+            alert(result.message || "Resume import stopped.");
+        } else if (result.success) {
             pResume.value = result.resume_text;
             logActivity("Resume File Uploaded", `Imported text from ${file.name}. Click 'Save Settings' to save.`, "success");
         } else {
@@ -917,21 +988,46 @@ async function handleResumeUpload(e) {
 }
 
 // Load Job Search Postings
-async function loadJobs() {
+async function loadJobs(options = {}) {
     try {
         const res = await fetch(`${API_URL}/api/jobs`);
         const jobs = await res.json();
         loadedJobs = jobs || [];
         currentJobs = new Map((jobs || []).map(job => [Number(job.id), job]));
-        renderFilteredJobs();
+        return renderFilteredJobs(options.revealJobId || null);
     } catch (e) {
         console.error(e);
         logActivity("Error Loading Jobs", "Could not query matched jobs list.", "error");
     }
 }
 
-function renderFilteredJobs() {
+function renderFilteredJobs(revealJobId = null) {
     jobsTableBody.replaceChildren();
+    const revealedJob = revealJobId
+        ? loadedJobs.find(job => Number(job.id) === Number(revealJobId))
+        : null;
+    const viewChanges = [];
+    if (revealedJob) {
+        const currentMinimum = Number(jobMinScore?.value || 40);
+        const revealedScore = revealedJob.match_score === null ? null : Number(revealedJob.match_score);
+        if (revealedScore !== null && revealedScore < currentMinimum) {
+            let showAllOption = Array.from(jobMinScore.options).find(option => option.value === "0");
+            if (!showAllOption) {
+                showAllOption = new Option("All scores (imported job)", "0");
+                jobMinScore.prepend(showAllOption);
+            }
+            jobMinScore.value = "0";
+            viewChanges.push("The minimum-score filter was changed to All scores so the imported job is visible.");
+        }
+        const statusFilter = jobStatusFilter?.value || "";
+        const statusMatches = !statusFilter
+            || (statusFilter === "applied" && ["applied", "interview", "offer", "rejected", "withdrawn", "closed"].includes(revealedJob.status))
+            || statusFilter === revealedJob.status;
+        if (!statusMatches) {
+            jobStatusFilter.value = "";
+            viewChanges.push("The status filter was reset to show the imported job.");
+        }
+    }
     const minimumScore = Number(jobMinScore?.value || 40);
     const statusFilter = jobStatusFilter?.value || "";
     let jobs = loadedJobs.filter(job => job.match_score === null || Number(job.match_score) >= minimumScore);
@@ -958,14 +1054,30 @@ function renderFilteredJobs() {
                     </td>
                 </tr>
             `;
-        return;
+        return viewChanges.join(" ");
     }
     jobs.forEach(job => jobsTableBody.appendChild(buildJobRow(job)));
+    if (revealedJob) {
+        requestAnimationFrame(() => {
+            const row = jobsTableBody.querySelector(`[data-job-id="${Number(revealedJob.id)}"]`);
+            if (!row) return;
+            row.classList.add("job-row-revealed");
+            row.focus({ preventScroll: true });
+            row.scrollIntoView({
+                behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+                block: "center"
+            });
+            window.setTimeout(() => row.classList.remove("job-row-revealed"), 5000);
+        });
+    }
+    return viewChanges.join(" ");
 }
 
 function buildJobRow(job) {
     const jobId = Number(job.id);
     const tr = createElement("tr");
+    tr.dataset.jobId = String(jobId);
+    tr.tabIndex = -1;
     const companyCell = createElement("td");
     companyCell.appendChild(createElement("strong", "", String(job.company || "Unknown company")));
     tr.appendChild(companyCell);
@@ -1036,12 +1148,20 @@ function buildJobRow(job) {
 }
 
 async function verifyJobPosting(jobId) {
-    showLoading("Verifying Listing...", "Rechecking the employer posting without changing application history.");
+    const operation = showCancellableLoading("Verifying Listing...", "Rechecking the employer posting without changing application history.");
     try {
-        const response = await fetch(`${API_URL}/api/jobs/${jobId}/verify`, { method: "POST" });
+        const response = await fetch(`${API_URL}/api/jobs/${jobId}/verify`, {
+            method: "POST",
+            headers: operationHeaders(operation)
+        });
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || "Could not verify listing.");
         hideLoading();
+        if (result.cancelled) {
+            logActivity("Listing Verification Stopped", result.message, "warning");
+            alert(result.message);
+            return;
+        }
         await Promise.all([loadJobs(), loadLogs()]);
         logActivity("Listing Verification", result.message, result.expired ? "warning" : "success");
         alert(result.message);
@@ -1148,13 +1268,13 @@ async function searchJobs(e) {
         ? `Searching for '${keywords}' ${location ? 'in ' + location : ''}...`
         : `Analyzing resume to suggest keywords and searching jobs...`;
     
-    showLoading("Searching & Analyzing Jobs...", "AI is extracting keywords from your resume, crawling Yahoo, and scoring postings.");
+    const operation = showCancellableLoading("Searching & Analyzing Jobs...", "AI is extracting keywords from your resume, crawling Yahoo, and scoring postings.");
     logActivity("Job Search Started", logMsg, "info");
     
     try {
         const res = await fetch(`${API_URL}/api/jobs/search`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: operationHeaders(operation, { "Content-Type": "application/json" }),
             body: JSON.stringify({
                 keywords,
                 location,
@@ -1166,7 +1286,10 @@ async function searchJobs(e) {
         });
         const result = await res.json();
         
-        if (result.success) {
+        if (result.cancelled) {
+            hideLoading();
+            logActivity("Job Search Stopped", result.message || "Search stopped.", "warning");
+        } else if (result.success) {
             if (saveSearchCheckbox?.checked) await loadSavedSearches();
             await checkDueSavedSearches();
             // Poll for background task status
@@ -1179,8 +1302,15 @@ async function searchJobs(e) {
                         await loadJobs();
                         await updateDashboardStats();
                         hideLoading();
-                        logActivity("Job Search Complete", "Found and analyzed new job openings.", "success");
-                        renderProviderAlerts(status.last_result);
+                        if (status.last_result?.cancelled) {
+                            logActivity("Job Search Stopped", status.last_result.message, "warning");
+                        } else if (status.last_result?.success === false) {
+                            logActivity("Search Failed", status.last_result.error || "Search did not complete.", "error");
+                            alert(status.last_result.error || "Search did not complete.");
+                        } else {
+                            logActivity("Job Search Complete", "Found and analyzed new job openings.", "success");
+                            renderProviderAlerts(status.last_result);
+                        }
                         await refreshSourceDiagnosticCount();
                     }
                 } catch (err) {
@@ -1189,7 +1319,7 @@ async function searchJobs(e) {
             }, 3000);
         } else {
             hideLoading();
-            alert(result.error || "Search failed.");
+            alert(result.message || result.error || "Search failed.");
         }
     } catch (err) {
         hideLoading();
@@ -1342,14 +1472,21 @@ async function clearSourceDiagnostics() {
 
 // Trigger AI Resume Tailoring
 async function tailorResumeForJob(jobId) {
-    showLoading("Tailoring Application...", "AI is rewriting experience highlights and crafting a cover letter. Generating PDF resume...");
+    const operation = showCancellableLoading("Tailoring Application...", "AI is rewriting experience highlights and crafting a cover letter. Generating PDF resume...");
     logActivity("Tailoring Started", `Generating custom resume for Job ID #${jobId}...`, "magic");
     
     try {
-        const res = await fetch(`${API_URL}/api/jobs/${jobId}/tailor`, { method: "POST" });
+        const res = await fetch(`${API_URL}/api/jobs/${jobId}/tailor`, {
+            method: "POST",
+            headers: operationHeaders(operation)
+        });
         const result = await res.json();
         
-        if (result.success) {
+        if (result.cancelled) {
+            hideLoading();
+            logActivity("Tailoring Stopped", result.message, "warning");
+            alert(result.message);
+        } else if (result.success) {
             hideLoading();
             logActivity("Tailoring Complete", `Resume and Cover Letter customized.`, "success");
             
@@ -1402,16 +1539,21 @@ async function saveTailoredMaterials() {
         alert("Both the tailored resume and cover letter must contain text.");
         return;
     }
-    showLoading("Saving Reviewed Materials...", "Regenerating the attached PDF from your edits.");
+    const operation = showCancellableLoading("Saving Reviewed Materials...", "Regenerating the attached PDF from your edits.");
     try {
         const response = await fetch(`${API_URL}/api/jobs/${selectedMaterialsJobId}/tailored`, {
             method: "PATCH",
-            headers: { "Content-Type": "application/json" },
+            headers: operationHeaders(operation, { "Content-Type": "application/json" }),
             body: JSON.stringify({ tailored_resume: tailoredResume, cover_letter: coverLetter })
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || "Could not save reviewed materials.");
         hideLoading();
+        if (result.cancelled) {
+            logActivity("PDF Regeneration Stopped", result.message, "warning");
+            alert(result.message);
+            return;
+        }
         logActivity("Materials Saved", `Resume PDF regenerated at ${result.pdf_page_count} page(s).`, "success");
         alert("Your edits were saved and the resume PDF was regenerated.");
     } catch (error) {

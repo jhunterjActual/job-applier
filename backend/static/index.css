@@ -911,6 +911,16 @@ select:focus {
     transition: var(--transition-smooth);
 }
 
+.data-table tbody tr.job-row-revealed {
+    background: color-mix(in srgb, var(--color-primary) 22%, transparent);
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+}
+
+.data-table tbody tr.job-row-revealed:focus {
+    outline-width: 3px;
+}
+
 .data-table tbody tr:hover {
     background-color: hsla(0, 0%, 100%, 0.015);
 }
@@ -1261,6 +1271,20 @@ select:focus {
     margin-bottom: 24px;
     display: flex;
     justify-content: center;
+}
+
+.loading-actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+.loading-actions[hidden] {
+    display: none;
+}
+
+#stop-loading-btn:disabled {
+    cursor: wait;
 }
 
 .dual-ring-spinner {

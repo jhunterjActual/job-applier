@@ -10,8 +10,10 @@ from playwright.sync_api import sync_playwright
 from google import genai
 from config import get_gemini_api_key
 from database import get_db_connection
+from operations import OperationCancelled
 from tailor import analyze_job_match, analyze_job_matches_batch
 from datetime import datetime
+from typing import Callable
 
 MIN_MATCH_SCORE = 40
 MAX_JOB_DESCRIPTION_CHARS = 50_000
@@ -39,6 +41,12 @@ INVALID_JOB_TEXT = (
     "page not found",
     "access denied",
 )
+
+
+def _cancellation_checkpoint(cancel_check: Callable[[], None] | None = None) -> None:
+    """Run an optional cooperative-cancellation checkpoint."""
+    if cancel_check:
+        cancel_check()
 ACCESS_CHALLENGE_TEXT = (
     "additional verification required", "are you a human", "captcha",
     "just a moment", "verify you are human", "unusual traffic",
@@ -972,8 +980,13 @@ def _scrape_job_details_browser(url: str, allow_partial: bool = False, diagnosti
     return details
 
 
-def inspect_job_posting(url: str, allow_partial: bool = False) -> dict:
+def inspect_job_posting(
+    url: str,
+    allow_partial: bool = False,
+    cancel_check: Callable[[], None] | None = None,
+) -> dict:
     """Return extracted details together with a privacy-safe outcome classification."""
+    _cancellation_checkpoint(cancel_check)
     canonical_url = canonicalize_job_url(url)
     is_public, reason = validate_public_http_url(canonical_url)
     if not is_public:
@@ -981,10 +994,12 @@ def inspect_job_posting(url: str, allow_partial: bool = False) -> dict:
 
     if provider_for_url(canonical_url) == "lever":
         api_outcome = _lever_posting_from_api(canonical_url)
+        _cancellation_checkpoint(cancel_check)
         if api_outcome["status"] != "api_unavailable":
             return api_outcome
         browser_diagnostic = {}
         details = _scrape_job_details_browser(canonical_url, allow_partial, browser_diagnostic)
+        _cancellation_checkpoint(cancel_check)
         status = browser_diagnostic.get("status", "provider_error")
         if status == "format_drift":
             status = "provider_error"
@@ -995,6 +1010,7 @@ def inspect_job_posting(url: str, allow_partial: bool = False) -> dict:
 
     browser_diagnostic = {}
     details = _scrape_job_details_browser(canonical_url, allow_partial, browser_diagnostic)
+    _cancellation_checkpoint(cancel_check)
     return _job_fetch_outcome(
         browser_diagnostic.get("status", "provider_error"),
         details,
@@ -1006,7 +1022,11 @@ def scrape_job_details(url: str, allow_partial: bool = False) -> dict:
     """Compatibility wrapper returning details only for callers that do not need diagnostics."""
     return inspect_job_posting(url, allow_partial)["details"]
 
-def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
+def run_job_search_and_matching(
+    keywords: str,
+    location: str = "",
+    cancel_check: Callable[[], None] | None = None,
+) -> dict:
     """
     Coordinates the entire job search pipeline: retrieves the resume,
     calculates/suggests keywords if undefined, searches job boards in parallel,
@@ -1022,6 +1042,14 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
     """
     # 1. Fetch user's base resume
     conn = get_db_connection()
+    def check_cancelled() -> None:
+        try:
+            _cancellation_checkpoint(cancel_check)
+        except Exception:
+            conn.close()
+            raise
+
+    check_cancelled()
     profile = conn.execute("SELECT base_resume_text, gemini_api_key, suggested_keywords FROM profile LIMIT 1").fetchone()
     if not profile or not profile["base_resume_text"]:
         conn.close()
@@ -1040,7 +1068,9 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
             search_keywords = [k.strip() for k in cached_kw.split(",") if k.strip()]
             print(f"Using cached suggested keywords from database: {search_keywords}")
         else:
+            check_cancelled()
             search_keywords = extract_search_keywords_from_resume(resume_text, api_key)
+            check_cancelled()
             # Save suggestions to cache
             conn.execute("UPDATE profile SET suggested_keywords = ? WHERE id = 1", (",".join(search_keywords),))
             conn.commit()
@@ -1089,10 +1119,13 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
     provider_candidate_counts = {provider: 0 for provider in PROVIDER_DOMAINS}
     for kw in search_keywords:
         for loc in locs:
+            check_cancelled()
             loc_str = f" in '{loc}'" if loc else ""
             print(f"Crawling Yahoo jobs for keyword: '{kw}'{loc_str}...")
             kw_results = search_yahoo_jobs(kw, loc, provider_health)
+            check_cancelled()
             for item in kw_results:
+                check_cancelled()
                 _append_candidate_with_budget(
                     item, results, seen_urls, provider_candidate_counts, provider_health
                 )
@@ -1106,6 +1139,7 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
     from job_suppressions import job_url_fingerprint, suppressed_job_fingerprints
     suppressed_fingerprints = suppressed_job_fingerprints(conn)
     for item in results:
+        check_cancelled()
         url = item["url"]
         provider = provider_for_url(url)
 
@@ -1124,7 +1158,8 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
         if provider in provider_health:
             provider_health[provider]["new_candidates"] += 1
             
-        outcome = inspect_job_posting(url)
+        outcome = inspect_job_posting(url, cancel_check=check_cancelled)
+        check_cancelled()
         job_details = outcome["details"]
         if provider in provider_health and outcome.get("used_browser_fallback"):
             provider_health[provider]["api_fallbacks"] += 1
@@ -1149,7 +1184,9 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
     batch_results = {}
     if scraped_jobs:
         try:
+            check_cancelled()
             batch_res = analyze_job_matches_batch(resume_text, scraped_jobs, api_key)
+            check_cancelled()
             if batch_res.get("success"):
                 # Map index to match results
                 for match in batch_res.get("matches", []):
@@ -1161,12 +1198,15 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
                         }
             else:
                 print(f"Batch matching API error: {batch_res.get('error')}")
+        except OperationCancelled:
+            raise
         except Exception as e:
             print(f"Failed to run batch matching: {e}")
             
     # 6. Insert matches into DB
     matches_added = 0
     for idx, job in enumerate(scraped_jobs):
+        check_cancelled()
         title = job["title"]
         company = job["company"]
         desc = job["description"]
@@ -1200,11 +1240,15 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
             ))
             conn.commit()
             matches_added += 1
+            check_cancelled()
+        except OperationCancelled:
+            raise
         except Exception as e:
             print(f"Error inserting job {url}: {e}")
             
     alerts = provider_alerts_from_health(provider_health)
 
+    check_cancelled()
     conn.close()
     return {
         "success": True,
