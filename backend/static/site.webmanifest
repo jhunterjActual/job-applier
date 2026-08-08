@@ -1,7 +1,7 @@
 {
-  "name": "Job Applier Agent",
-  "short_name": "Job Applier",
-  "description": "A privacy-first assistant for discovering jobs and preparing application materials.",
+  "name": "CareerTrellis",
+  "short_name": "CareerTrellis",
+  "description": "A privacy-first workspace for finding, tailoring, tracking, and preparing for job opportunities.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

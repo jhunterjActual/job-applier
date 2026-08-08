@@ -286,7 +286,7 @@ class MapsProviderAbstractionTests(unittest.TestCase):
         request = open_url.call_args.args[0]
         self.assertIn("countrycodes=us", request.full_url)
         self.assertIn("format=jsonv2", request.full_url)
-        self.assertIn("JobApplierAgent", request.get_header("User-agent"))
+        self.assertIn("CareerTrellis", request.get_header("User-agent"))
         self.assertEqual("openstreetmap", result.source)
         self.assertEqual("US", result.country_code)
         self.assertEqual("© OpenStreetMap contributors", result.attribution)
@@ -860,8 +860,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-15", html_source)
-        self.assertIn("index.css?v=20260808-15", html_source)
+        self.assertIn("app.js?v=20260808-16", html_source)
+        self.assertIn("index.css?v=20260808-16", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -869,7 +869,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.15", source)
+                self.assertIn("20260808.16", source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -932,10 +932,11 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertNotIn("8000", powershell_source)
         self.assertNotIn("8000", batch_source)
 
-    def test_job_applier_brand_assets_and_manifest_are_wired(self) -> None:
+    def test_career_trellis_brand_assets_and_manifest_are_wired(self) -> None:
         static_dir = Path(__file__).parent / "static"
         html_source = (static_dir / "index.html").read_text(encoding="utf-8")
         manifest_source = (static_dir / "site.webmanifest").read_text(encoding="utf-8")
+        favicon_source = (static_dir / "icons" / "favicon.svg").read_text(encoding="utf-8")
         for asset in (
             "icons/favicon.ico", "icons/favicon.svg", "icons/apple-touch-icon.png",
             "icons/safari-pinned-tab.svg", "icons/icon-192.png", "icons/icon-512.png",
@@ -944,7 +945,32 @@ class FrontendStartupTests(unittest.TestCase):
                 self.assertTrue((static_dir / asset).is_file())
         self.assertIn('rel="manifest" href="/static/site.webmanifest"', html_source)
         self.assertIn('src="/static/icons/favicon.svg"', html_source)
-        self.assertIn('"name": "Job Applier Agent"', manifest_source)
+        self.assertIn('<title>CareerTrellis</title>', html_source)
+        self.assertIn('Career<span>Trellis</span>', html_source)
+        self.assertIn('"name": "CareerTrellis"', manifest_source)
+        self.assertIn('<title id="title">CareerTrellis</title>', favicon_source)
+
+    def test_career_trellis_brand_replaces_automatic_application_language(self) -> None:
+        project_dir = Path(__file__).parent.parent
+        app_source = (project_dir / "backend" / "app.py").read_text(encoding="utf-8")
+        script_source = (project_dir / "backend" / "static" / "app.js").read_text(encoding="utf-8")
+        readme_source = (project_dir / "README.md").read_text(encoding="utf-8")
+        launcher_source = "\n".join(
+            (project_dir / launcher).read_text(encoding="utf-8")
+            for launcher in ("run.bat", "run.ps1")
+        )
+        self.assertIn('FastAPI(title="CareerTrellis API"', app_source)
+        self.assertIn('alias="X-CareerTrellis-Operation"', app_source)
+        self.assertIn('"X-CareerTrellis-Operation"', script_source)
+        self.assertTrue(readme_source.startswith("# CareerTrellis\n"))
+        self.assertIn("Starting CareerTrellis", launcher_source)
+        html_source = (project_dir / "backend" / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("Agent Activity Stream", html_source)
+        for old_brand in ("Job Applier Agent", "AI Job Applier", "JobApplierAgent"):
+            with self.subTest(old_brand=old_brand):
+                self.assertNotIn(old_brand, app_source)
+                self.assertNotIn(old_brand, script_source)
+                self.assertNotIn(old_brand, launcher_source)
 
     def test_cleanup_footer_has_scoped_responsive_actions(self) -> None:
         static_dir = Path(__file__).parent / "static"
@@ -1145,7 +1171,7 @@ class DependencyLockTests(unittest.TestCase):
                 self.assertLess(lower_source.index(".venv-previous-"), lower_source.index("-m venv"))
                 self.assertLess(lower_source.index("--require-hashes"), lower_source.index("write --stamp"))
                 self.assertLess(lower_source.index("write --stamp"), lower_source.index("environment repair complete"))
-                self.assertIn("stop any running job applier copy with ctrl+c", lower_source)
+                self.assertIn("stop any running careertrellis copy with ctrl+c", lower_source)
         powershell_source = (self.project_dir() / "run.ps1").read_text(encoding="utf-8")
         batch_source = (self.project_dir() / "run.bat").read_text(encoding="utf-8")
         self.assertIn("(3, 10, 2)", powershell_source)
@@ -1570,7 +1596,7 @@ class UserDataExportTests(unittest.TestCase):
         self.assertEqual("nosniff", response.headers["x-content-type-options"])
         self.assertRegex(
             response.headers["content-disposition"],
-            r'^attachment; filename="job-applier-user-data-\d{4}-\d{2}-\d{2}\.json"$',
+            r'^attachment; filename="career-trellis-user-data-\d{4}-\d{2}-\d{2}\.json"$',
         )
         self.assertIn('\n  "schema_version": 1,', response.text)
 

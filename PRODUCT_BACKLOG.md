@@ -47,7 +47,9 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 
 ## P2 - Broader job-seeker value
 
-- [x] Replace the inherited GCD site icon with Job Applier branding, including appropriate favicon, pinned-tab, application-manifest, and mobile home-screen assets.
+- [x] Replace the inherited GCD site icon with product-specific branding, including appropriate favicon, pinned-tab, application-manifest, and mobile home-screen assets.
+- [x] Rename the product to CareerTrellis so its market identity reflects a privacy-first, user-controlled search, tailoring, tracking, and preparation workspace rather than automatic application submission.
+- [ ] Before public launch, complete professional trademark, corporate-name, app-store, domain, and social-handle clearance for CareerTrellis; secure the selected properties and then decide whether to rename the GitHub repository and legacy compatibility identifiers.
 - [x] Show a privacy-safe "Maps API key saved" state and replacement guidance in Profile & Resume, matching the existing Gemini-key experience without revealing either stored key.
 - [x] Add an AI-provider abstraction with securely stored bring-your-own keys, model selection, capability validation, and clear provider-specific errors; support providers beyond Gemini without exposing secrets to the browser.
 - [x] Add a geocoding/maps-provider abstraction with provider selection, securely stored credentials, validation, rate-limit handling, and support for alternatives to Google Maps.

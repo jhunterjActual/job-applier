@@ -1,8 +1,8 @@
 @echo off
 setlocal
-title AI Job Applier Agent
+title CareerTrellis
 echo ==========================================
-echo    Starting AI Job Applier Agent...
+echo    Starting CareerTrellis...
 echo ==========================================
 
 cd /d "%~dp0backend"
@@ -89,7 +89,7 @@ if errorlevel 1 goto setup_failed
 if errorlevel 1 goto setup_failed
 if exist "%VENV_BACKUP%" (
     rmdir /s /q "%VENV_BACKUP%" 2>nul
-    if exist "%VENV_BACKUP%" echo Warning: The previous environment remains at "%VENV_BACKUP%" and can be removed after the older Job Applier process stops.
+    if exist "%VENV_BACKUP%" echo Warning: The previous environment remains at "%VENV_BACKUP%" and can be removed after the older CareerTrellis process stops.
 )
 echo Environment repair complete.
 
@@ -97,9 +97,9 @@ echo Environment repair complete.
 echo Python environment verified.
 echo Launching FastAPI Backend...
 echo Access the Dashboard at http://127.0.0.1:%PORT%/
-echo Press Ctrl+C to shut down the agent.
+echo Press Ctrl+C to stop CareerTrellis.
 
-start "" /b powershell -NoProfile -WindowStyle Hidden -Command "$ready=$false; 1..30 | ForEach-Object { if (-not $ready) { Start-Sleep 1; try { $v=Invoke-RestMethod 'http://127.0.0.1:%PORT%/api/version' -TimeoutSec 1; if ($v.build -eq '20260808.15') { $ready=$true; Start-Process 'http://127.0.0.1:%PORT%/?build=20260808.15' } } catch {} } }"
+start "" /b powershell -NoProfile -WindowStyle Hidden -Command "$ready=$false; 1..30 | ForEach-Object { if (-not $ready) { Start-Sleep 1; try { $v=Invoke-RestMethod 'http://127.0.0.1:%PORT%/api/version' -TimeoutSec 1; if ($v.build -eq '20260808.16') { $ready=$true; Start-Process 'http://127.0.0.1:%PORT%/?build=20260808.16' } } catch {} } }"
 "%VENV_PYTHON%" -m uvicorn app:app --host 127.0.0.1 --port %PORT% --reload
 set "SERVER_EXIT=%ERRORLEVEL%"
 pause
@@ -121,6 +121,6 @@ exit /b 1
 
 :environment_in_use
 echo Unable to replace the virtual environment.
-echo Stop any running Job Applier copy with Ctrl+C, then run this script again.
+echo Stop any running CareerTrellis copy with Ctrl+C, then run this script again.
 pause
 exit /b 1

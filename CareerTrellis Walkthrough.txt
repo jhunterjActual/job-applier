@@ -1,0 +1,46 @@
+# CareerTrellis Walkthrough
+
+CareerTrellis is a privacy-first, local job-search workspace for discovering opportunities, assessing fit, tailoring truthful application materials, tracking confirmed progress, and preparing for interviews. It does not submit applications automatically.
+
+## Start CareerTrellis
+
+From the repository directory, use either launcher:
+
+- PowerShell: `./run.ps1`
+- Command Prompt: `run.bat`
+
+The launcher prepares the local Python environment and opens `http://127.0.0.1:8001/`. Use the optional port argument when 8001 is unavailable.
+
+## 1. Configure your profile and resumes
+
+1. Open **Profile & Resume**.
+2. Enter contact information and select an AI provider/model. OpenStreetMap is the default headquarters provider for new users.
+3. Add or import one or more base resumes and factual professional evidence.
+4. Save settings, then test the selected providers.
+5. Use **Export My Data** whenever you want a privacy-filtered JSON copy of the local workspace.
+
+## 2. Find and review opportunities
+
+1. Open **Search & Match**.
+2. Enter keywords and optional locations, or use resume-based suggestions.
+3. Select **Search & Analyze** and review source notices, match reasoning, detected job requirements, and filters.
+4. Use **Add Job by URL** for a posting that search did not find.
+
+## 3. Prepare application materials
+
+1. Select **Tailor Materials** on a saved job.
+2. Review and edit the resume and cover letter; the AI must not invent experience, credentials, or outcomes.
+3. Save edits, then download the resume PDF or accessible DOCX and cover-letter TXT.
+
+## 4. Apply with user control
+
+1. Select **Apply Manually** and open the verified employer posting.
+2. Complete and submit the employer's form yourself.
+3. Return to CareerTrellis and use **Mark Applied** only after you have actually applied.
+4. Record the date, method, notes, follow-up date, and later lifecycle outcomes.
+
+## 5. Track and prepare
+
+- Use **Application Logs** to update status, download materials, and review outcome history.
+- Open **Interview Preparation** for a local starter plan or an explicit, provider-generated draft grounded in saved application context.
+- Use dashboard insights as directional workflow feedback, especially when the sample is small.

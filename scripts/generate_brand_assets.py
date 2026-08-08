@@ -1,4 +1,4 @@
-"""Generate raster favicon and mobile assets from the Job Applier icon geometry."""
+"""Generate raster favicon and mobile assets from the CareerTrellis icon geometry."""
 
 from pathlib import Path
 

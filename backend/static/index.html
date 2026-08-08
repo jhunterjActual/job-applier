@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#52a6ff">
-    <meta name="application-name" content="Job Applier Agent">
-    <meta name="description" content="A privacy-first assistant for discovering jobs and preparing application materials.">
-    <title>Job Applier Agent</title>
+    <meta name="application-name" content="CareerTrellis">
+    <meta name="description" content="Find, tailor, track, and prepare for job opportunities on your terms.">
+    <title>CareerTrellis</title>
     <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" sizes="180x180">
@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-15">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-16">
 </head>
 <body>
     <div class="app-container">
@@ -27,7 +27,7 @@
         <aside class="sidebar">
             <div class="logo-area">
                 <div class="logo-icon"><img src="/static/icons/favicon.svg" alt=""></div>
-                <div class="logo-text">JobApplier<span>Agent</span></div>
+                <div class="logo-text">Career<span>Trellis</span></div>
             </div>
             
             <nav class="nav-menu">
@@ -171,7 +171,7 @@
                 <div class="dashboard-content-grid">
                     <div class="card main-card">
                         <div class="card-header">
-                            <h2>Agent Activity Stream</h2>
+                            <h2>Workspace Activity</h2>
                             <span class="badge">Live</span>
                         </div>
                         <div class="card-body">
@@ -179,7 +179,7 @@
                                 <div class="timeline-item">
                                     <div class="timeline-icon"><i class="fa-solid fa-info-circle"></i></div>
                                     <div class="timeline-content">
-                                        <p class="timeline-title" id="startup-activity-title">Initializing Agent</p>
+                                        <p class="timeline-title" id="startup-activity-title">Loading Workspace</p>
                                         <p class="timeline-desc" id="startup-activity-description">Loading your saved profile and application workspace.</p>
                                         <span class="timeline-time">Just now</span>
                                     </div>
@@ -305,7 +305,7 @@
                                 </div>
                                 <div class="form-group full-width provider-policy" id="openstreetmap-policy" hidden>
                                     <strong>OpenStreetMap public-service limits</strong>
-                                    <small class="form-help">Job Applier identifies its requests, limits lookups to one per second, and caches successful results. Do not use this option for bulk lookups. Data © OpenStreetMap contributors.</small>
+                                    <small class="form-help">CareerTrellis identifies its requests, limits lookups to one per second, and caches successful results. Do not use this option for bulk lookups. Data © OpenStreetMap contributors.</small>
                                     <small class="form-help"><a href="https://operations.osmfoundation.org/policies/nominatim/" target="_blank" rel="noopener noreferrer">Nominatim usage policy</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap copyright</a></small>
                                 </div>
                                 <div class="form-group full-width">
@@ -687,7 +687,7 @@
             </div>
             <form id="job-import-form">
                 <div class="modal-body">
-                    <p class="text-muted margin-bottom-md">Paste a public job-posting URL. Job Applier will extract what it can, then let you review every field before saving.</p>
+                    <p class="text-muted margin-bottom-md">Paste a public job-posting URL. CareerTrellis will extract what it can, then let you review every field before saving.</p>
                     <div class="job-import-url-row">
                         <div class="form-group flex-grow">
                             <label for="job-import-url">Job posting URL</label>
@@ -1064,7 +1064,7 @@
                 <div class="dual-ring-spinner"></div>
             </div>
             <h3 id="loading-title">Processing Request...</h3>
-            <p id="loading-subtitle" class="text-muted">Please wait while JobApplier prepares your request.</p>
+            <p id="loading-subtitle" class="text-muted">Please wait while CareerTrellis prepares your request.</p>
             <div class="loading-actions" id="loading-actions" hidden>
                 <button type="button" class="btn btn-secondary" id="stop-loading-btn">
                     <i class="fa-solid fa-stop"></i> Stop
@@ -1074,6 +1074,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-15"></script>
+    <script src="/static/app.js?v=20260808-16"></script>
 </body>
 </html>
