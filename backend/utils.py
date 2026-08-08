@@ -3,6 +3,13 @@ import re
 import html
 from pathlib import Path
 from config import get_gemini_api_key, get_google_maps_api_key
+from ai_providers import AIProviderSettings
+from maps_providers import (
+    MapsProviderSettings,
+    _headquarters_query,
+    _looks_like_us_address,
+    resolve_headquarters,
+)
 
 
 def _inline_markdown(text: str) -> str:
@@ -251,17 +258,6 @@ def generate_cover_letter_pdf(cover_letter_text: str, output_pdf_path: str) -> d
     
     return generate_pdf_from_html(html_body, output_pdf_path, is_resume=False, max_pages=1)
 
-def _looks_like_us_address(address: str) -> bool:
-    """Return whether a formatted address explicitly identifies the United States."""
-    return bool(re.search(r"\b(?:USA|United States(?: of America)?)\b", address or "", re.IGNORECASE))
-
-
-def _headquarters_query(company_name: str, prefer_us: bool) -> str:
-    """Build a Places query that carries the user's headquarters preference."""
-    scope = "United States headquarters" if prefer_us else "global headquarters"
-    return f"{company_name} {scope}"
-
-
 def find_us_headquarters(
     company_name: str,
     api_key: str = None,
@@ -271,78 +267,13 @@ def find_us_headquarters(
     job_location: str = "",
     job_url: str = "",
 ) -> str:
-    """
-    Resolves a company headquarters address, preferring a U.S. location when
-    the user has selected that preference and the employer has one.
-    Checks the Google Places API first if a key is provided,
-    otherwise falls back to the Gemini API.
-    
-    Args:
-        company_name (str): The name of the company to look up.
-        api_key (str, optional): The Gemini API key (for fallback).
-        google_maps_key (str, optional): The Google Maps/Places API key.
-        prefer_us (bool): Prefer a U.S. address when the employer has one.
-        job_location (str): Posting location used to disambiguate the employer.
-        job_url (str): Posting URL used to disambiguate the employer.
-        
-    Returns:
-        str: The resolved full address or 'Unknown'.
-    """
-    # 1. Try Google Places API first if key is provided
-    g_key = google_maps_key or get_google_maps_api_key()
-    if g_key:
-        import urllib.request
-        import urllib.parse
-        import json
-        try:
-            query = _headquarters_query(company_name, prefer_us)
-            encoded_query = urllib.parse.quote_plus(query)
-            url = f"https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input={encoded_query}&inputtype=textquery&fields=formatted_address,name&key={g_key}"
-            
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-            with urllib.request.urlopen(req) as response:
-                res_data = json.loads(response.read().decode('utf-8'))
-                candidates = res_data.get("candidates", [])
-                if candidates:
-                    addr = candidates[0].get("formatted_address")
-                    if addr and (not prefer_us or _looks_like_us_address(addr)):
-                        return addr
-        except Exception as e:
-            print(f"Error querying Google Places API for '{company_name}': {e}")
-            
-    # 2. Fallback to Gemini API
-    key = api_key or get_gemini_api_key()
-    if not key:
-        return "Unknown"
-        
-    try:
-        from google import genai
-        client = genai.Client(api_key=key)
-        address_scope = (
-            "the employer's U.S. headquarters address when it has one; otherwise use its primary global headquarters"
-            if prefer_us
-            else "the employer's primary global headquarters address"
-        )
-        prompt = f"""
-        Identify {address_scope} for the exact employer '{company_name}'.
-        Identity context from the job posting:
-        - Job location: {job_location or 'not provided'}
-        - Job posting URL: {job_url or 'not provided'}
-
-        Do not substitute a similarly named company. Respond with ONLY the full,
-        verified address, including country. If the employer identity or address
-        cannot be verified confidently, respond with exactly: Unknown
-        """
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
-        )
-        location = (response.text or "").strip()
-        if not location or location.lower() == "unknown":
-            return "Unknown"
-        if len(location) > 250: # Sanitization in case of verbose response
-            location = location[:250]
-        return location
-    except Exception as e:
-        print(f"Error resolving headquarters: {e}")
-        return "Unknown"
+    """Backward-compatible wrapper around the Google maps adapter."""
+    result = resolve_headquarters(
+        MapsProviderSettings("google", google_maps_key or get_google_maps_api_key()),
+        AIProviderSettings("gemini", "gemini-2.5-flash", api_key or get_gemini_api_key()),
+        company_name,
+        prefer_us=prefer_us,
+        job_location=job_location,
+        job_url=job_url,
+    )
+    return result.address

@@ -1,4 +1,6 @@
+import hashlib
 import os
+import sqlite3
 import tempfile
 import time
 from contextlib import asynccontextmanager
@@ -20,6 +22,15 @@ from ai_providers import (
     settings_from_profile,
     validate_provider_capability,
 )
+from maps_providers import (
+    HeadquartersResult,
+    MapsProviderError,
+    maps_provider_ready,
+    maps_settings_from_profile,
+    normalize_maps_provider,
+    resolve_headquarters,
+    validate_maps_provider,
+)
 from database import get_db_connection
 from tailor import analyze_job_match, apply_resume_section_template, finalize_cover_letter, tailor_resume_and_cover_letter
 from searcher import (
@@ -30,7 +41,7 @@ from searcher import (
     run_job_search_and_matching,
     validate_public_http_url,
 )
-from utils import generate_resume_pdf, find_us_headquarters
+from utils import generate_resume_pdf
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import is_job_suppressed, record_job_suppression
@@ -52,10 +63,84 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.6"
+APP_BUILD = "20260808.7"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _headquarters_cache_key(
+    provider: str,
+    company: str,
+    prefer_us: bool,
+    job_location: str,
+    job_url: str,
+) -> str:
+    """Fingerprint only bounded lookup context, never a complete posting URL."""
+    hostname = (urlsplit(job_url).hostname or "").lower()
+    context = "\n".join(
+        (
+            normalize_maps_provider(provider),
+            " ".join(company.lower().split()),
+            "us" if prefer_us else "global",
+            " ".join((job_location or "").lower().split()),
+            hostname,
+        )
+    )
+    return hashlib.sha256(context.encode("utf-8")).hexdigest()
+
+
+def _cached_headquarters(cache_key: str) -> HeadquartersResult | None:
+    conn = get_db_connection()
+    try:
+        row = conn.execute(
+            "SELECT provider, address, country_code, attribution FROM headquarters_cache WHERE cache_key = ?",
+            (cache_key,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return HeadquartersResult(
+        address=row["address"],
+        source=row["provider"],
+        attribution=row["attribution"],
+        country_code=row["country_code"],
+    )
+
+
+def _cache_headquarters(cache_key: str, result: HeadquartersResult, selected_provider: str) -> None:
+    """Cache provider results; AI fallbacks remain retryable and explicitly provisional."""
+    provider = normalize_maps_provider(selected_provider)
+    # The public Nominatim policy asks applications to cache results. Google
+    # Places content has separate storage restrictions, so it is never added to
+    # this lookup cache (application history remains a distinct user record).
+    if provider != "openstreetmap" or result.address == "Unknown" or result.source != provider:
+        return
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO headquarters_cache (
+                cache_key, provider, address, country_code, attribution, resolved_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cache_key,
+                provider,
+                result.address,
+                result.country_code,
+                result.attribution,
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        conn.close()
 
 
 @asynccontextmanager
@@ -137,6 +222,7 @@ class ProfileUpdate(BaseModel):
     resume_mode: Literal["it", "technical_executive", "general_professional", "federal", "healthcare", "education", "sales", "trades_operations", "academic_cv", "cover_letter"] = "general_professional"
     ai_provider: Literal["gemini", "openai"] = "gemini"
     ai_model: str = Field(default="gemini-2.5-flash", min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._:/-]+$")
+    maps_provider: Literal["google", "openstreetmap"] = "google"
     prefer_us_headquarters: bool = True
 
 
@@ -209,9 +295,13 @@ def get_profile() -> dict:
         result["openai_api_key_configured"] = provider_key_configured(row, "openai")
         result.pop("gemini_api_key", None)
         result.pop("openai_api_key", None)
-        result["google_maps_api_key_configured"] = bool(result.pop("google_maps_api_key", ""))
+        result["google_maps_api_key_configured"] = bool(
+            result.pop("google_maps_api_key", "") or config.get_google_maps_api_key()
+        )
         result["ai_provider"] = normalize_provider(result.get("ai_provider"))
         result["ai_model"] = str(result.get("ai_model") or default_model(result["ai_provider"]))
+        result["maps_provider"] = normalize_maps_provider(result.get("maps_provider"))
+        result["maps_provider_ready"] = maps_provider_ready(row, result["maps_provider"])
         return result
     return {}
 
@@ -231,12 +321,13 @@ def update_profile(profile: ProfileUpdate) -> dict:
     UPDATE profile
     SET name = ?, email = ?, phone = ?, github = ?, linkedin = ?, website = ?,
         base_resume_text = ?, resume_mode = ?, ai_provider = ?, ai_model = ?,
-        prefer_us_headquarters = ?, suggested_keywords = ''
+        maps_provider = ?, prefer_us_headquarters = ?, suggested_keywords = ''
     WHERE id = 1
     """, (
         profile.name, profile.email, profile.phone, profile.github, profile.linkedin,
         profile.website, profile.base_resume_text, profile.resume_mode,
-        profile.ai_provider, profile.ai_model, int(profile.prefer_us_headquarters),
+        profile.ai_provider, profile.ai_model, profile.maps_provider,
+        int(profile.prefer_us_headquarters),
     ))
     conn.commit()
     conn.close()
@@ -280,7 +371,7 @@ def update_profile_secrets(secrets: ProfileSecretsUpdate) -> dict:
         "success": True,
         "gemini_api_key_configured": provider_key_configured(configured, "gemini"),
         "openai_api_key_configured": provider_key_configured(configured, "openai"),
-        "google_maps_api_key_configured": bool(configured["google_maps_api_key"]),
+        "google_maps_api_key_configured": bool(configured["google_maps_api_key"] or config.get_google_maps_api_key()),
     }
 
 
@@ -304,6 +395,28 @@ def validate_ai_provider(
         except OperationCancelled:
             return {"success": False, "cancelled": True, "message": "AI provider test stopped."}
         except AIProviderError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/profile/maps-provider/validate")
+def validate_selected_maps_provider(
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
+    """Validate the selected maps provider without exposing its credential."""
+    with operation_scope(operation_id) as operation:
+        try:
+            operation.checkpoint()
+            conn = get_db_connection()
+            try:
+                profile = conn.execute("SELECT * FROM profile WHERE id = 1").fetchone()
+            finally:
+                conn.close()
+            result = validate_maps_provider(maps_settings_from_profile(profile), operation.checkpoint)
+            operation.checkpoint()
+            return result
+        except OperationCancelled:
+            return {"success": False, "cancelled": True, "message": "Maps provider test stopped."}
+        except MapsProviderError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 @app.post("/api/profile/upload-resume")
@@ -1184,7 +1297,7 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     conn.close()
     
     ai_settings = settings_from_profile(profile)
-    google_key = profile["google_maps_api_key"]
+    maps_settings = maps_settings_from_profile(profile)
     res = tailor_resume_and_cover_letter(
         base_resume_text=profile["base_resume_text"],
         job_title=job["title"],
@@ -1239,15 +1352,27 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     existing = conn.execute("SELECT id FROM applications WHERE job_id = ?", (job_id,)).fetchone()
     conn.close()
 
-    # Find headquarters
-    hq = find_us_headquarters(
+    # Headquarters lookups are cached by provider and bounded identity context.
+    prefer_us_headquarters = bool(profile["prefer_us_headquarters"])
+    headquarters_cache_key = _headquarters_cache_key(
+        maps_settings.provider,
         job["company"],
-        profile["gemini_api_key"] or config.get_gemini_api_key(),
-        google_key,
-        prefer_us=bool(profile["prefer_us_headquarters"]),
-        job_location=job["location"] or "",
-        job_url=job["url"] or "",
+        prefer_us_headquarters,
+        job["location"] or "",
+        job["url"] or "",
     )
+    headquarters = _cached_headquarters(headquarters_cache_key)
+    if headquarters is None:
+        headquarters = resolve_headquarters(
+            maps_settings,
+            ai_settings,
+            job["company"],
+            prefer_us=prefer_us_headquarters,
+            job_location=job["location"] or "",
+            job_url=job["url"] or "",
+            cancel_check=operation.checkpoint,
+        )
+        _cache_headquarters(headquarters_cache_key, headquarters, maps_settings.provider)
     operation.checkpoint()
 
     # The two file replacements and database update below are the short commit
@@ -1261,18 +1386,28 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     if existing:
         conn.execute("""
         UPDATE applications
-        SET company = ?, position = ?, us_hq = ?, tailored_resume_path = ?, cover_letter_path = ?, tailored_resume_text = ?, cover_letter = ?,
+        SET company = ?, position = ?, us_hq = ?, headquarters_source = ?, headquarters_attribution = ?,
+            tailored_resume_path = ?, cover_letter_path = ?, tailored_resume_text = ?, cover_letter = ?,
             created_at = COALESCE(created_at, ?), tailored_at = ?,
             status = CASE WHEN status IN ('applied', 'interview', 'offer') THEN status ELSE 'tailored' END
         WHERE job_id = ?
-        """, (job["company"], job["title"], hq, str(resume_pdf_path.resolve()), str(cover_letter_path.resolve()), res["tailored_resume"], cover_letter_text, now, now, job_id))
+        """, (
+            job["company"], job["title"], headquarters.address, headquarters.source,
+            headquarters.attribution, str(resume_pdf_path.resolve()), str(cover_letter_path.resolve()),
+            res["tailored_resume"], cover_letter_text, now, now, job_id,
+        ))
     else:
         conn.execute("""
         INSERT INTO applications (
-            job_id, company, position, date_applied, us_hq, tailored_resume_path,
-            cover_letter_path, tailored_resume_text, cover_letter, status, created_at, tailored_at
-        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 'tailored', ?, ?)
-        """, (job_id, job["company"], job["title"], hq, str(resume_pdf_path.resolve()), str(cover_letter_path.resolve()), res["tailored_resume"], cover_letter_text, now, now))
+            job_id, company, position, date_applied, us_hq, headquarters_source,
+            headquarters_attribution, tailored_resume_path, cover_letter_path,
+            tailored_resume_text, cover_letter, status, created_at, tailored_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'tailored', ?, ?)
+        """, (
+            job_id, job["company"], job["title"], headquarters.address, headquarters.source,
+            headquarters.attribution, str(resume_pdf_path.resolve()), str(cover_letter_path.resolve()),
+            res["tailored_resume"], cover_letter_text, now, now,
+        ))
         
     # Update job status to tailored
     conn.execute("""
@@ -1295,7 +1430,10 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
         "success": True,
         "tailored_resume": res["tailored_resume"],
         "cover_letter": cover_letter_text,
-        "us_hq": hq,
+        "us_hq": headquarters.address,
+        "headquarters_source": headquarters.source,
+        "headquarters_attribution": headquarters.attribution,
+        "headquarters_warning": headquarters.warning,
         "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
         "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",
         "manual_application_url": f"/api/jobs/{job_id}/apply-manually",
@@ -1339,6 +1477,8 @@ def get_tailored_details(job_id: int) -> dict:
             "tailored_resume_path": app_row["tailored_resume_path"],
             "cover_letter_path": cover_letter_path,
             "us_hq": app_row["us_hq"],
+            "headquarters_source": app_row["headquarters_source"],
+            "headquarters_attribution": app_row["headquarters_attribution"],
             "status": app_row["status"],
             "resume_download_url": f"/api/jobs/{job_id}/materials/resume",
             "cover_letter_download_url": f"/api/jobs/{job_id}/materials/cover-letter",

@@ -13,6 +13,7 @@ let geminiKeyConfigured = false;
 let openAIKeyConfigured = false;
 let googleMapsKeyConfigured = false;
 let aiProviderSettingsSaved = false;
+let mapsProviderSettingsSaved = false;
 let loadedJobs = [];
 let jobImportCanonicalUrl = null;
 let sourceDiagnosticsOpener = null;
@@ -38,7 +39,10 @@ const pAiProvider = document.getElementById("p-ai-provider");
 const pAiModel = document.getElementById("p-ai-model");
 const pApiKey = document.getElementById("p-apikey");
 const pOpenAIApiKey = document.getElementById("p-openai-apikey");
+const pMapsProvider = document.getElementById("p-maps-provider");
 const pGoogleApiKey = document.getElementById("p-google-apikey");
+const googleMapsKeyGroup = document.getElementById("google-maps-key-group");
+const openStreetMapPolicy = document.getElementById("openstreetmap-policy");
 const pGeminiKeyStatus = document.getElementById("p-gemini-key-status");
 const pGeminiKeyHelp = document.getElementById("p-gemini-key-help");
 const pOpenAIKeyStatus = document.getElementById("p-openai-key-status");
@@ -54,10 +58,17 @@ const toggleOpenAIApiVisibilityBtn = document.getElementById("toggle-openai-api-
 const toggleGoogleApiVisibilityBtn = document.getElementById("toggle-google-api-visibility");
 const testAIProviderBtn = document.getElementById("test-ai-provider-btn");
 const aiProviderTestStatus = document.getElementById("ai-provider-test-status");
+const testMapsProviderBtn = document.getElementById("test-maps-provider-btn");
+const mapsProviderTestStatus = document.getElementById("maps-provider-test-status");
 
 const AI_PROVIDERS = {
     gemini: { label: "Google Gemini", defaultModel: "gemini-2.5-flash" },
     openai: { label: "OpenAI", defaultModel: "gpt-5-mini" }
+};
+
+const MAPS_PROVIDERS = {
+    google: { label: "Google Places", requiresKey: true },
+    openstreetmap: { label: "OpenStreetMap Nominatim", requiresKey: false }
 };
 
 // Search Form Elements
@@ -164,6 +175,9 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(pApiKey, "input", markAIProviderSettingsDirty);
     bindEvent(pOpenAIApiKey, "input", markAIProviderSettingsDirty);
     bindEvent(testAIProviderBtn, "click", testSavedAIProvider);
+    bindEvent(pMapsProvider, "change", handleMapsProviderChange);
+    bindEvent(pGoogleApiKey, "input", markMapsProviderSettingsDirty);
+    bindEvent(testMapsProviderBtn, "click", testSavedMapsProvider);
     bindEvent(resumeFileUpload, "change", handleResumeUpload);
     bindEvent(searchForm, "submit", searchJobs);
     bindEvent(refreshJobsBtn, "click", loadJobs);
@@ -832,6 +846,48 @@ function markAIProviderSettingsDirty() {
     updateProviderTestAvailability();
 }
 
+function selectedMapsProvider() {
+    return MAPS_PROVIDERS[pMapsProvider?.value] ? pMapsProvider.value : "google";
+}
+
+function selectedMapsProviderMeta() {
+    return MAPS_PROVIDERS[selectedMapsProvider()];
+}
+
+function handleMapsProviderChange() {
+    markMapsProviderSettingsDirty();
+    updateMapsProviderControls();
+}
+
+function markMapsProviderSettingsDirty() {
+    mapsProviderSettingsSaved = false;
+    updateMapsProviderTestAvailability();
+}
+
+function updateMapsProviderControls() {
+    const isGoogle = selectedMapsProvider() === "google";
+    if (googleMapsKeyGroup) googleMapsKeyGroup.hidden = !isGoogle;
+    if (openStreetMapPolicy) openStreetMapPolicy.hidden = isGoogle;
+    updateMapsProviderTestAvailability();
+}
+
+function updateMapsProviderTestAvailability() {
+    if (!testMapsProviderBtn || !mapsProviderTestStatus) return;
+    const provider = selectedMapsProviderMeta();
+    const hasCredential = !provider.requiresKey || googleMapsKeyConfigured;
+    testMapsProviderBtn.disabled = !mapsProviderSettingsSaved || !hasCredential;
+    mapsProviderTestStatus.className = "form-help full-width provider-test-status";
+    if (!mapsProviderSettingsSaved) {
+        mapsProviderTestStatus.textContent = "Save maps-provider and key changes before testing.";
+    } else if (!hasCredential) {
+        mapsProviderTestStatus.textContent = "Save a Google Places API key before testing.";
+    } else if (selectedMapsProvider() === "openstreetmap") {
+        mapsProviderTestStatus.textContent = "Ready for a rate-limited OpenStreetMap test lookup (© OpenStreetMap contributors).";
+    } else {
+        mapsProviderTestStatus.textContent = `Ready to test the saved ${provider.label} configuration.`;
+    }
+}
+
 function updateProviderTestAvailability() {
     if (!testAIProviderBtn || !aiProviderTestStatus) return;
     const provider = selectedAIProviderMeta();
@@ -893,12 +949,13 @@ function updateSecretStatuses() {
         pGoogleKeyStatus,
         pGoogleKeyHelp,
         googleMapsKeyConfigured,
-        "optional Google Maps",
+        "Google Places",
         "Saved locally. Leave this field blank to keep the current key, or enter a new key to replace it.",
-        "Optional. Used by Google Places to resolve headquarters street addresses.",
+        "Required when Google Places is selected. The key is stored only on this machine.",
     );
     updateApiKeyStatus();
     updateProviderTestAvailability();
+    updateMapsProviderControls();
 }
 
 function markSecretStatusesUnavailable() {
@@ -948,11 +1005,13 @@ async function loadProfile() {
             pAiModel.value = profile.ai_model || selectedAIProviderMeta().defaultModel;
             pApiKey.value = "";
             pOpenAIApiKey.value = "";
+            pMapsProvider.value = profile.maps_provider || "google";
             pGoogleApiKey.value = "";
             geminiKeyConfigured = !!profile.gemini_api_key_configured;
             openAIKeyConfigured = !!profile.openai_api_key_configured;
             googleMapsKeyConfigured = !!profile.google_maps_api_key_configured;
             aiProviderSettingsSaved = true;
+            mapsProviderSettingsSaved = true;
             updateSecretStatuses();
             updateStartupActivity(profile);
             pResume.value = profile.base_resume_text || "";
@@ -990,6 +1049,7 @@ async function saveProfile(e) {
         resume_mode: pResumeMode.value,
         ai_provider: selectedAIProvider(),
         ai_model: pAiModel.value.trim(),
+        maps_provider: selectedMapsProvider(),
         prefer_us_headquarters: pPreferUsHeadquarters.checked
     };
     
@@ -1025,6 +1085,7 @@ async function saveProfile(e) {
         if (result.success) {
             userDisplayName.innerText = payload.name || "Candidate";
             aiProviderSettingsSaved = true;
+            mapsProviderSettingsSaved = true;
             updateSecretStatuses();
             updateStartupActivity(payload);
             logActivity("Profile Saved", `Contact details and ${selectedAIProviderMeta().label} settings saved.`, "success");
@@ -1035,6 +1096,39 @@ async function saveProfile(e) {
         hideLoading();
         console.error(err);
         logActivity("Profile Save Failed", "Error storing profile adjustments.", "error");
+    }
+}
+
+async function testSavedMapsProvider() {
+    const provider = selectedMapsProviderMeta();
+    const operation = showCancellableLoading(
+        `Testing ${provider.label}...`,
+        selectedMapsProvider() === "openstreetmap"
+            ? "Running one policy-compliant, rate-limited lookup."
+            : "Validating the saved Google Places key and lookup capability."
+    );
+    mapsProviderTestStatus.className = "form-help full-width provider-test-status";
+    mapsProviderTestStatus.textContent = `Testing the saved ${provider.label} configuration…`;
+    try {
+        const response = await fetch(`${API_URL}/api/profile/maps-provider/validate`, {
+            method: "POST",
+            headers: operationHeaders(operation)
+        });
+        const result = await response.json();
+        hideLoading();
+        if (result.cancelled) {
+            mapsProviderTestStatus.textContent = result.message || "Maps provider test stopped.";
+            return;
+        }
+        if (!response.ok) throw new Error(result.detail || "The maps provider test failed.");
+        mapsProviderTestStatus.className = "form-help full-width provider-test-status success";
+        mapsProviderTestStatus.textContent = `${result.message}${result.attribution ? ` ${result.attribution}.` : ""}`;
+        logActivity("Maps Provider Ready", result.message, "success");
+    } catch (error) {
+        hideLoading();
+        mapsProviderTestStatus.className = "form-help full-width provider-test-status error";
+        mapsProviderTestStatus.textContent = error.message || "The maps provider test failed.";
+        logActivity("Maps Provider Test Failed", mapsProviderTestStatus.textContent, "error");
     }
 }
 
@@ -1605,6 +1699,10 @@ async function tailorResumeForJob(jobId) {
         } else if (result.success) {
             hideLoading();
             logActivity("Tailoring Complete", `Resume and Cover Letter customized.`, "success");
+            if (result.headquarters_warning) {
+                logActivity("Headquarters Address Needs Review", result.headquarters_warning, "warning");
+                alert(result.headquarters_warning);
+            }
             
             // Reload job table
             await loadJobs();
@@ -1707,6 +1805,23 @@ async function loadLogs() {
 
             const hqCell = createElement("td");
             hqCell.append(createElement("i", "fa-solid fa-location-dot text-muted"), document.createTextNode(` ${log.us_hq || "Unknown"}`));
+            if (log.headquarters_attribution) {
+                const attribution = createElement("small", "headquarters-attribution");
+                if (log.headquarters_source === "openstreetmap") {
+                    const link = createElement("a", "", log.headquarters_attribution);
+                    link.href = "https://www.openstreetmap.org/copyright";
+                    link.target = "_blank";
+                    link.rel = "noopener noreferrer";
+                    attribution.appendChild(link);
+                } else {
+                    attribution.textContent = log.headquarters_attribution;
+                    if (log.headquarters_source === "google") {
+                        attribution.classList.add("google-maps-attribution");
+                        attribution.setAttribute("translate", "no");
+                    }
+                }
+                hqCell.appendChild(attribution);
+            }
             tr.appendChild(hqCell);
             const statusCell = createElement("td");
             const statusClass = ["applied", "interview", "offer"].includes(log.status) ? "badge-applied" : "badge-tailored";

@@ -612,6 +612,48 @@ select:focus {
     color: var(--color-red);
 }
 
+.provider-policy {
+    gap: 6px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: hsla(0, 0%, 100%, 0.025);
+}
+
+.provider-policy[hidden],
+#google-maps-key-group[hidden] {
+    display: none !important;
+}
+
+.provider-policy a,
+.headquarters-attribution a {
+    color: var(--color-primary);
+}
+
+.form-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.headquarters-attribution {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-muted);
+    font-size: 11.5px;
+}
+
+.google-maps-attribution {
+    color: var(--text-secondary);
+    font-family: Roboto, sans-serif;
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 400;
+    letter-spacing: normal;
+    white-space: nowrap;
+}
+
 .secret-key-status {
     flex: 0 0 auto;
     padding: 3px 8px;

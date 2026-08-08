@@ -27,10 +27,10 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Uses a single consolidated, schema-validated provider request returning JSON instead of separate resume and cover-letter calls.
    - Converts Markdown and plain text outputs into polished, print-ready PDF files using Playwright.
 
-4. **Address Resolution (with Google Places API + Gemini Fallback)**:
+4. **Provider-Selectable Headquarters Resolution**:
    - Automatically queries and logs the full street address (including ZIP code/international details) of company headquarters.
-   - Optionally integrates with the **Google Places API** to resolve company locations and conserve Gemini API calls.
-   - Automatically falls back to the Gemini API if the Google Maps key is missing or invalid.
+   - Supports bring-your-own-key **Google Places** or rate-limited **OpenStreetMap Nominatim**, with successful OpenStreetMap results cached locally and provider attribution retained in application history.
+   - Uses the selected AI provider only as a clearly labeled, verify-before-filing fallback when the maps lookup cannot verify an address.
 
 5. **Guided Manual Applications**:
    - Reviews and saves tailored materials before application work begins.
@@ -55,7 +55,7 @@ The application features a **FastAPI backend** that doubles as a static file ser
 * Python 3.10.2 or higher.
 * Google Chrome or Chromium (installed automatically by Playwright).
 * A **Gemini API Key** from [Google AI Studio](https://aistudio.google.com/) or an **OpenAI API Key**.
-* *Optional*: A Google Maps API Key with the **Places API** enabled.
+* A Google Maps API Key with the **Places API (New)** enabled if you select Google Places. OpenStreetMap does not require a key.
 
 ### Quick Start (Windows)
 We have provided automated startup scripts in the root directory:
@@ -113,9 +113,11 @@ If you prefer setting up manually or are on macOS/Linux:
 
 1. **Set up Profile**:
    - Go to the **Profile & Resume** tab.
-   - Enter your contact details and personal links, select **Google Gemini** or **OpenAI**, choose a compatible model, and paste that provider's API key (plus an optional **Google Maps API Key**).
+   - Enter your contact details and personal links, select **Google Gemini** or **OpenAI**, choose a compatible model, and paste that provider's API key.
+   - Select **Google Places** or **OpenStreetMap Nominatim** for headquarters lookups. Google requires a saved Places API key; OpenStreetMap requires no key.
    - Each key field shows a privacy-safe **Saved** or **Not saved** status. Saved keys are never displayed; leave the field blank to keep the current key or enter a new key to replace it.
    - Save the settings, then use **Test Saved AI Provider** to validate the stored key, selected model, and structured-output capability before starting a long search.
+   - Use **Test Saved Maps Provider** for a small, user-triggered capability check. The public Nominatim option identifies the app, sends at most one request per second, caches successful results, and must not be used for bulk or autocomplete traffic. Set `NOMINATIM_BASE_URL` to an approved self-hosted/third-party endpoint when public-service limits do not fit your use.
    - Keep **Prefer a U.S. headquarters address** selected when U.S. unemployment reporting requires a domestic employer address; clear it to prefer the employer's primary global headquarters.
    - Upload your base resume as a `.txt` or `.md` file, or copy-paste it directly.
    - Click **Save Settings**.
