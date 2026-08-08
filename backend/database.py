@@ -123,6 +123,21 @@ def init_db() -> None:
         FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
     )
     """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS job_suppressions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url_fingerprint TEXT NOT NULL UNIQUE,
+        hostname TEXT NOT NULL,
+        company TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL DEFAULT '',
+        deleted_at TEXT NOT NULL,
+        deletion_source TEXT NOT NULL
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_suppressions_deleted_at ON job_suppressions(deleted_at DESC)"
+    )
     
     # Check and add suggested_keywords column if it doesn't exist
     _add_column_if_missing(cursor, "profile", "suggested_keywords", "TEXT DEFAULT ''")

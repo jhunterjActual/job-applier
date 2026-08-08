@@ -1054,6 +1054,46 @@ select:focus {
     margin: 10px 0 0 20px;
 }
 
+.suppression-review {
+    padding-top: 18px;
+    border-top: 1px solid var(--border-color);
+}
+
+.suppression-review-header,
+.suppression-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.suppression-list {
+    display: grid;
+    gap: 10px;
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.suppression-item {
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: hsla(0, 0%, 100%, 0.02);
+}
+
+.suppression-item div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+.suppression-item span {
+    color: var(--text-muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
 .cleanup-sample-list li {
     margin-bottom: 6px;
 }
@@ -1193,6 +1233,12 @@ select:focus {
     .cleanup-summary-grid,
     .cleanup-footer .modal-actions {
         grid-template-columns: 1fr;
+    }
+
+    .suppression-review-header,
+    .suppression-item {
+        align-items: stretch;
+        flex-direction: column;
     }
 
     .job-import-url-row {

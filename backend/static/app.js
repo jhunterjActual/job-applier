@@ -107,6 +107,10 @@ const closeCleanupModalBtns = [
 const archiveUntouchedBtn = document.getElementById("archive-untouched-btn");
 const deleteUntouchedBtn = document.getElementById("delete-untouched-btn");
 const restoreArchivedBtn = document.getElementById("restore-archived-btn");
+const suppressionCount = document.getElementById("suppression-count");
+const suppressionList = document.getElementById("suppression-list");
+const suppressionEmpty = document.getElementById("suppression-empty");
+const clearAllSuppressionsBtn = document.getElementById("clear-all-suppressions-btn");
 const lifecycleModal = document.getElementById("lifecycle-modal");
 const lifecycleForm = document.getElementById("lifecycle-form");
 const lifecycleStatus = document.getElementById("lifecycle-status");
@@ -145,6 +149,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(archiveUntouchedBtn, "click", () => runCleanupAction("archive"));
     bindEvent(deleteUntouchedBtn, "click", () => runCleanupAction("delete"));
     bindEvent(restoreArchivedBtn, "click", () => runCleanupAction("restore"));
+    bindEvent(clearAllSuppressionsBtn, "click", clearAllJobSuppressions);
     bindEvent(lifecycleForm, "submit", saveLifecycleChange);
     bindEvent(document.getElementById("close-lifecycle-modal"), "click", hideLifecycleModal);
     bindEvent(document.getElementById("cancel-lifecycle-btn"), "click", hideLifecycleModal);
@@ -479,6 +484,13 @@ async function previewJobImport() {
             showJobImportMessage(`This URL is already saved as job #${existing.id}: ${existing.company || "Unknown company"} — ${existing.title || "Untitled role"}.`, true);
             return;
         }
+        if (result.suppressed) {
+            jobImportCanonicalUrl = null;
+            jobImportFields.hidden = true;
+            saveJobImportBtn.disabled = true;
+            showJobImportMessage(result.message, true);
+            return;
+        }
 
         const job = result.job || {};
         jobImportCanonicalUrl = job.url;
@@ -566,6 +578,7 @@ async function showCleanupPreview() {
         });
         document.getElementById("cleanup-sample-container").style.display = result.sample.length ? "block" : "none";
 
+        await loadJobSuppressions();
         hideLoading();
         cleanupModal.classList.add("active");
         cleanupActionEnableTimer = setTimeout(() => {
@@ -579,6 +592,48 @@ async function showCleanupPreview() {
         console.error(error);
         alert(error.message || "Failed to prepare cleanup preview.");
     }
+}
+
+async function loadJobSuppressions() {
+    const response = await fetch(`${API_URL}/api/job-suppressions`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Could not load suppressed postings.");
+
+    suppressionCount.textContent = String(result.count || 0);
+    suppressionList.replaceChildren();
+    suppressionEmpty.hidden = result.items.length > 0;
+    clearAllSuppressionsBtn.disabled = result.count === 0;
+    result.items.forEach(item => {
+        const row = createElement("li", "suppression-item");
+        const details = createElement("div");
+        details.appendChild(createElement("strong", "", `${item.company || "Unknown company"} — ${item.title || "Untitled role"}`));
+        const source = item.deletion_source === "bulk_cleanup" ? "bulk cleanup" : "manual deletion";
+        details.appendChild(createElement("span", "", `${item.hostname} · ${item.deleted_at} · ${source}`));
+        const clearButton = createActionButton("Allow again", "fa-solid fa-rotate-left", "btn btn-secondary btn-sm", () => clearJobSuppression(item.id));
+        row.append(details, clearButton);
+        suppressionList.appendChild(row);
+    });
+}
+
+async function clearJobSuppression(suppressionId) {
+    const response = await fetch(`${API_URL}/api/job-suppressions/${suppressionId}`, { method: "DELETE" });
+    const result = await response.json();
+    if (!response.ok) {
+        alert(result.detail || "Could not clear the posting suppression.");
+        return;
+    }
+    await loadJobSuppressions();
+}
+
+async function clearAllJobSuppressions() {
+    if (!confirm("Allow all previously deleted postings to appear in future searches again?")) return;
+    const response = await fetch(`${API_URL}/api/job-suppressions`, { method: "DELETE" });
+    const result = await response.json();
+    if (!response.ok) {
+        alert(result.detail || "Could not clear posting suppressions.");
+        return;
+    }
+    await loadJobSuppressions();
 }
 
 async function runCleanupAction(action) {

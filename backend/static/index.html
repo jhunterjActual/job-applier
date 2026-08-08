@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-1">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-2">
 </head>
 <body>
     <div class="app-container">
@@ -493,8 +493,21 @@
                     <ul id="cleanup-sample-list" class="cleanup-sample-list"></ul>
                 </div>
                 <p class="form-help margin-top-sm">
-                    Archive is reversible. Permanent delete removes the previewed untouched records and cannot be undone.
+                    Archive is reversible. Permanent deletion removes the records and suppresses the same postings in future searches until you clear their suppressions.
                 </p>
+                <section class="suppression-review margin-top-md" aria-labelledby="suppression-review-title">
+                    <div class="suppression-review-header">
+                        <div>
+                            <h3 id="suppression-review-title">Suppressed postings <span class="cleanup-count-badge" id="suppression-count">0</span></h3>
+                            <p class="form-help">Deleted postings are identified by a private URL fingerprint. Clear one when you want that posting to be discoverable again.</p>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="clear-all-suppressions-btn" disabled>
+                            Clear all
+                        </button>
+                    </div>
+                    <p class="text-muted" id="suppression-empty">No deleted postings are currently suppressed.</p>
+                    <ul class="suppression-list" id="suppression-list"></ul>
+                </section>
             </div>
             <div class="modal-footer cleanup-footer">
                 <button type="button" class="btn btn-secondary cleanup-action-btn cleanup-restore-btn" id="restore-archived-btn">
@@ -658,6 +671,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-1"></script>
+    <script src="/static/app.js?v=20260808-2"></script>
 </body>
 </html>

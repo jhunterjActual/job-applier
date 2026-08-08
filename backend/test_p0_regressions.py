@@ -14,6 +14,7 @@ from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from materials import material_download_name, persist_cover_letter, resolve_output_file
 from database import get_db_connection
 from job_cleanup import apply_cleanup, cleanup_preview
+from job_suppressions import job_url_fingerprint, record_job_suppression
 from searcher import (
     _job_location_from_json_ld,
     _protect_browser_network,
@@ -184,13 +185,14 @@ class FrontendStartupTests(unittest.TestCase):
             "open-job-import-btn", "job-import-modal", "job-import-form",
             "job-import-url", "preview-job-import-btn", "job-import-fields",
             "job-import-company", "job-import-title", "job-import-description",
-            "save-job-import-btn",
+            "save-job-import-btn", "suppression-count", "suppression-list",
+            "suppression-empty", "clear-all-suppressions-btn",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking Gemini API Key", html_source)
-        self.assertIn("app.js?v=20260808-1", html_source)
-        self.assertIn("index.css?v=20260808-1", html_source)
+        self.assertIn("app.js?v=20260808-2", html_source)
+        self.assertIn("index.css?v=20260808-2", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -198,7 +200,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.1", source)
+                self.assertIn("20260808.2", source)
 
     def test_manual_application_flow_replaces_browser_submission(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -435,6 +437,12 @@ class ManualJobImportTests(unittest.TestCase):
             CREATE TABLE applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER, status TEXT
             );
+            CREATE TABLE job_suppressions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url_fingerprint TEXT NOT NULL UNIQUE, hostname TEXT NOT NULL,
+                company TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+                deleted_at TEXT NOT NULL, deletion_source TEXT NOT NULL
+            );
             INSERT INTO profile VALUES (1, 'Experienced data leader', 'test-key');
         """)
         connection.close()
@@ -531,6 +539,71 @@ class ManualJobImportTests(unittest.TestCase):
             )
         self.assertTrue(result["duplicate"])
         scraper.assert_not_called()
+
+    def test_suppressed_posting_is_reported_before_scraping(self) -> None:
+        connection = self.connection_factory()
+        record_job_suppression(
+            connection,
+            url="https://example.test/jobs/123?utm_source=old",
+            company="Example", title="Deleted role",
+            deleted_at="2026-08-08T10:00:00", deletion_source="manual",
+        )
+        connection.commit()
+        connection.close()
+        scraper = unittest.mock.Mock()
+        with (
+            patch.object(app_module, "get_db_connection", side_effect=self.connection_factory),
+            patch.object(app_module, "validate_public_http_url", return_value=(True, "")),
+            patch.object(app_module, "inspect_job_posting", scraper),
+        ):
+            result = app_module.preview_manual_job(
+                app_module.ManualJobPreviewRequest(url="https://example.test/jobs/123?utm_campaign=new")
+            )
+        self.assertTrue(result["suppressed"])
+        self.assertIn("Clear its suppression", result["message"])
+        scraper.assert_not_called()
+
+    def test_manual_delete_records_suppression_without_full_url(self) -> None:
+        connection = self.connection_factory()
+        connection.execute(
+            "INSERT INTO jobs (title, company, description, url, status) VALUES (?, ?, ?, ?, ?)",
+            ("Deleted role", "Example", "Description", "https://example.test/jobs/secret-123", "matched"),
+        )
+        job_id = connection.execute("SELECT id FROM jobs").fetchone()[0]
+        connection.commit()
+        connection.close()
+        with patch.object(app_module, "get_db_connection", side_effect=self.connection_factory):
+            result = app_module.delete_job(job_id)
+
+        self.assertTrue(result["success"])
+        connection = self.connection_factory()
+        suppression = connection.execute("SELECT * FROM job_suppressions").fetchone()
+        self.assertEqual("example.test", suppression["hostname"])
+        self.assertEqual("manual", suppression["deletion_source"])
+        self.assertNotIn("secret-123", " ".join(str(value) for value in suppression))
+        self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+        connection.close()
+
+    def test_suppressions_can_be_reviewed_and_cleared(self) -> None:
+        connection = self.connection_factory()
+        record_job_suppression(
+            connection,
+            url="https://example.test/jobs/allow-again",
+            company="Example", title="Allow again",
+            deleted_at="2026-08-08T10:00:00", deletion_source="manual",
+        )
+        connection.commit()
+        connection.close()
+        with patch.object(app_module, "get_db_connection", side_effect=self.connection_factory):
+            review = app_module.get_job_suppressions()
+            cleared = app_module.clear_job_suppression(review["items"][0]["id"])
+            after = app_module.get_job_suppressions()
+
+        self.assertEqual(1, review["count"])
+        self.assertNotIn("url", review["items"][0])
+        self.assertNotIn("url_fingerprint", review["items"][0])
+        self.assertEqual(1, cleared["cleared"])
+        self.assertEqual(0, after["count"])
 
     def test_preview_uses_resolved_url_and_detects_redirect_duplicate(self) -> None:
         connection = self.connection_factory()
@@ -760,6 +833,62 @@ class SearchQualityTests(unittest.TestCase):
     def test_tracking_variants_share_one_canonical_url(self) -> None:
         base = "https://jobs.lever.co/example/abc-123"
         self.assertEqual(base, canonicalize_job_url(base + "/?source=linkedin#apply"))
+
+    def test_search_skips_suppressed_canonical_url_before_scraping(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "suppressed-search.db"
+            connection = sqlite3.connect(database_path)
+            connection.executescript("""
+                CREATE TABLE profile (
+                    id INTEGER PRIMARY KEY, base_resume_text TEXT,
+                    gemini_api_key TEXT, suggested_keywords TEXT
+                );
+                CREATE TABLE jobs (
+                    id INTEGER PRIMARY KEY, url TEXT, status TEXT
+                );
+                CREATE TABLE job_suppressions (
+                    id INTEGER PRIMARY KEY, url_fingerprint TEXT UNIQUE,
+                    hostname TEXT, company TEXT, title TEXT,
+                    deleted_at TEXT, deletion_source TEXT
+                );
+                INSERT INTO profile VALUES (1, 'Experienced data leader', 'test-key', '');
+            """)
+            record_job_suppression(
+                connection,
+                url="https://jobs.lever.co/example/abc-123?source=old",
+                company="Example", title="Data leader",
+                deleted_at="2026-08-08T10:00:00", deletion_source="manual",
+            )
+            connection.commit()
+            connection.close()
+
+            def connection_factory():
+                test_connection = sqlite3.connect(database_path)
+                test_connection.row_factory = sqlite3.Row
+                return test_connection
+
+            scraper = unittest.mock.Mock()
+            matcher = unittest.mock.Mock()
+            with (
+                patch.object(searcher_module, "get_db_connection", side_effect=connection_factory),
+                patch.object(searcher_module, "search_yahoo_jobs", return_value=[{
+                    "url": "https://jobs.lever.co/example/abc-123?utm_source=new"
+                }]),
+                patch.object(searcher_module, "inspect_job_posting", scraper),
+                patch.object(searcher_module, "analyze_job_matches_batch", matcher),
+            ):
+                result = searcher_module.run_job_search_and_matching("data leader")
+
+        self.assertEqual(0, result["jobs_added"])
+        self.assertEqual(1, result["provider_health"]["lever"]["skipped_suppressed"])
+        scraper.assert_not_called()
+        matcher.assert_not_called()
+
+    def test_url_fingerprint_ignores_tracking_variants(self) -> None:
+        self.assertEqual(
+            job_url_fingerprint("https://jobs.lever.co/example/abc-123?source=linkedin"),
+            job_url_fingerprint("https://jobs.lever.co/example/abc-123?utm_campaign=email"),
+        )
 
     def test_ashby_application_route_canonicalizes_to_the_posting(self) -> None:
         posting = "https://jobs.ashbyhq.com/change/c73f61f9-e17d-4d29-bc58-40702ef50ef2"
@@ -1175,7 +1304,7 @@ class LifecycleSchemaTests(unittest.TestCase):
         self.assertIn("prefer_us_headquarters", profile_columns)
         self.assertEqual(1, connection.execute("PRAGMA foreign_keys").fetchone()[0])
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertTrue({"application_status_history", "saved_searches"}.issubset(tables))
+        self.assertTrue({"application_status_history", "saved_searches", "job_suppressions"}.issubset(tables))
         saved_search_columns = {row[1] for row in connection.execute("PRAGMA table_info(saved_searches)")}
         self.assertTrue({"schedule_frequency", "next_alert_at"}.issubset(saved_search_columns))
         connection.close()
@@ -1234,6 +1363,7 @@ class BulkCleanupTests(unittest.TestCase):
                 id INTEGER PRIMARY KEY,
                 company TEXT,
                 title TEXT,
+                url TEXT,
                 date_found TEXT,
                 match_score INTEGER,
                 status TEXT,
@@ -1241,10 +1371,16 @@ class BulkCleanupTests(unittest.TestCase):
                 archived_from_status TEXT
             );
             CREATE TABLE applications (id INTEGER PRIMARY KEY, job_id INTEGER);
-            INSERT INTO jobs VALUES (1, 'A', 'Untouched', '2026-01-01', 90, 'matched', NULL, NULL);
-            INSERT INTO jobs VALUES (2, 'B', 'Has History', '2026-01-01', 80, 'matched', NULL, NULL);
-            INSERT INTO jobs VALUES (3, 'C', 'Tailored', '2026-01-01', 70, 'tailored', NULL, NULL);
-            INSERT INTO jobs VALUES (4, 'D', 'Archived', '2026-01-01', 60, 'archived', '2026-01-02', 'matched');
+            CREATE TABLE job_suppressions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url_fingerprint TEXT NOT NULL UNIQUE, hostname TEXT NOT NULL,
+                company TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+                deleted_at TEXT NOT NULL, deletion_source TEXT NOT NULL
+            );
+            INSERT INTO jobs VALUES (1, 'A', 'Untouched', 'https://jobs.example.test/1', '2026-01-01', 90, 'matched', NULL, NULL);
+            INSERT INTO jobs VALUES (2, 'B', 'Has History', 'https://jobs.example.test/2', '2026-01-01', 80, 'matched', NULL, NULL);
+            INSERT INTO jobs VALUES (3, 'C', 'Tailored', 'https://jobs.example.test/3', '2026-01-01', 70, 'tailored', NULL, NULL);
+            INSERT INTO jobs VALUES (4, 'D', 'Archived', 'https://jobs.example.test/4', '2026-01-01', 60, 'archived', '2026-01-02', 'matched');
             INSERT INTO applications VALUES (1, 2);
         """)
 
@@ -1262,7 +1398,7 @@ class BulkCleanupTests(unittest.TestCase):
         preview = cleanup_preview(self.connection)
         token = preview["actions"]["archive"]["preview_token"]
         self.connection.execute(
-            "INSERT INTO jobs VALUES (5, 'E', 'New', '2026-01-03', 50, 'matched', NULL, NULL)"
+            "INSERT INTO jobs VALUES (5, 'E', 'New', 'https://jobs.example.test/5', '2026-01-03', 50, 'matched', NULL, NULL)"
         )
         with self.assertRaisesRegex(ValueError, "changed after preview"):
             apply_cleanup(self.connection, "archive", token, "2026-01-04T00:00:00")
@@ -1293,6 +1429,13 @@ class BulkCleanupTests(unittest.TestCase):
         self.assertEqual(2, affected)
         remaining = self.connection.execute("SELECT id FROM jobs ORDER BY id").fetchall()
         self.assertEqual([2, 3], [row[0] for row in remaining])
+        suppressions = self.connection.execute(
+            "SELECT hostname, deletion_source FROM job_suppressions ORDER BY id"
+        ).fetchall()
+        self.assertEqual(
+            [("jobs.example.test", "bulk_cleanup"), ("jobs.example.test", "bulk_cleanup")],
+            [tuple(row) for row in suppressions],
+        )
 
 
 if __name__ == "__main__":
