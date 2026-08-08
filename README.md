@@ -48,6 +48,10 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Stores skills, projects, portfolio links, licenses, certifications, and work samples with each named base resume, including its non-destructive version history.
    - Provides guidance for each resume mode and sends only the candidate's entered evidence to the selected AI provider during user-triggered tailoring. Missing issuers, dates, outcomes, metrics, or credential status must not be inferred.
 
+9. **Local Application Effectiveness Insights**:
+   - Summarizes confirmed applications, employer responses, interviews, offers, rejections, response rates, and recorded response timing directly on the dashboard.
+   - Breaks outcomes down by job source, role, location, source resume version, and application method without sending application history to an analytics or AI provider. Percentages from small samples are explicitly presented as directional rather than predictive.
+
 ---
 
 ## 🛠️ Architecture

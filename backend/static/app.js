@@ -22,6 +22,7 @@ let baseResumes = [];
 let currentBaseResumeId = null;
 let baseResumeSnapshot = null;
 let selectedBaseResumeVersion = null;
+let applicationInsights = null;
 
 // DOM Elements
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -164,6 +165,12 @@ const jobImportDescription = document.getElementById("job-import-description");
 const refreshLogsBtn = document.getElementById("refresh-logs-btn");
 const logsTableBody = document.querySelector("#logs-table tbody");
 
+// Dashboard insight elements
+const applicationInsightsDimension = document.getElementById("application-insights-dimension");
+const applicationInsightsBody = document.getElementById("application-insights-body");
+const applicationInsightsGroupHeading = document.getElementById("application-insights-group-heading");
+const applicationInsightsNote = document.getElementById("application-insights-note");
+
 // Modals
 const tailorModal = document.getElementById("tailor-modal");
 const closeTailorModalBtns = [
@@ -264,6 +271,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(document.getElementById("close-job-import-modal"), "click", hideJobImportModal);
     bindEvent(document.getElementById("cancel-job-import-btn"), "click", hideJobImportModal);
     bindEvent(refreshLogsBtn, "click", loadLogs);
+    bindEvent(applicationInsightsDimension, "change", renderApplicationInsights);
     
     // Modal controls
     closeTailorModalBtns.forEach(btn => btn.addEventListener("click", hideTailorModal));
@@ -302,6 +310,7 @@ document.addEventListener("DOMContentLoaded", () => {
     checkDueSavedSearches();
     loadJobs();
     loadLogs();
+    loadApplicationInsights();
     refreshSourceDiagnosticCount();
     document.addEventListener("keydown", event => {
         if (event.key === "Escape" && sourceDiagnosticsModal.classList.contains("active")) {
@@ -2385,6 +2394,87 @@ async function loadLogs() {
     }
 }
 
+const APPLICATION_INSIGHT_DIMENSION_LABELS = {
+    source: "Job source",
+    role: "Role",
+    location: "Location",
+    resume: "Resume version",
+    method: "Application method"
+};
+
+function formatInsightRate(value) {
+    const number = Number(value || 0);
+    return `${Number.isInteger(number) ? number : number.toFixed(1)}%`;
+}
+
+function setInsightValue(id, value) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = String(value);
+}
+
+function renderApplicationInsights() {
+    if (!applicationInsightsBody) return;
+    const dimension = applicationInsightsDimension?.value || "source";
+    const dimensionLabel = APPLICATION_INSIGHT_DIMENSION_LABELS[dimension] || "Group";
+    if (applicationInsightsGroupHeading) applicationInsightsGroupHeading.textContent = dimensionLabel;
+    applicationInsightsBody.replaceChildren();
+
+    const groups = applicationInsights?.groups?.[dimension] || [];
+    if (!groups.length) {
+        const row = createElement("tr");
+        const cell = createElement("td", "table-empty-state compact");
+        cell.colSpan = 7;
+        cell.appendChild(createElement("p", "", "Confirm an application to begin measuring outcomes."));
+        row.appendChild(cell);
+        applicationInsightsBody.appendChild(row);
+        return;
+    }
+
+    groups.forEach(group => {
+        const row = createElement("tr");
+        row.appendChild(createElement("td", "", String(group.label || "Unknown")));
+        row.appendChild(createElement("td", "", String(group.applications || 0)));
+        row.appendChild(createElement("td", "", String(group.responses || 0)));
+        row.appendChild(createElement("td", "", String(group.interviews || 0)));
+        row.appendChild(createElement("td", "", String(group.offers || 0)));
+        row.appendChild(createElement("td", "", String(group.rejections || 0)));
+        row.appendChild(createElement("td", "insights-rate", formatInsightRate(group.response_rate)));
+        applicationInsightsBody.appendChild(row);
+    });
+}
+
+async function loadApplicationInsights() {
+    if (!applicationInsightsBody) return;
+    try {
+        const response = await fetch(`${API_URL}/api/application-insights`);
+        if (!response.ok) throw new Error(`Application insights returned HTTP ${response.status}`);
+        applicationInsights = await response.json();
+        const summary = applicationInsights.summary || {};
+        setInsightValue("insight-applications", summary.applications || 0);
+        setInsightValue("insight-responses", summary.responses || 0);
+        setInsightValue("insight-interviews", summary.interviews || 0);
+        setInsightValue("insight-offers", summary.offers || 0);
+        setInsightValue("insight-rejections", summary.rejections || 0);
+        setInsightValue("insight-response-rate", formatInsightRate(summary.response_rate));
+        if (applicationInsightsNote) {
+            const average = summary.average_response_days;
+            applicationInsightsNote.textContent = average === null || average === undefined
+                ? "Treat percentages from small samples as directional, not predictive. Response timing appears after a recorded employer outcome."
+                : `Average recorded response time: ${average} day${Number(average) === 1 ? "" : "s"}. Treat small samples as directional, not predictive.`;
+        }
+        renderApplicationInsights();
+    } catch (error) {
+        applicationInsights = null;
+        ["insight-applications", "insight-responses", "insight-interviews", "insight-offers", "insight-rejections", "insight-response-rate"]
+            .forEach(id => setInsightValue(id, "—"));
+        renderApplicationInsights();
+        if (applicationInsightsNote) {
+            applicationInsightsNote.textContent = "Application effectiveness insights are temporarily unavailable.";
+        }
+        console.error("Error loading application insights", error);
+    }
+}
+
 // Update Overview Stats cards
 async function updateDashboardStats() {
     try {
@@ -2406,4 +2496,5 @@ async function updateDashboardStats() {
     } catch (err) {
         console.error("Error updating stats", err);
     }
+    await loadApplicationInsights();
 }
