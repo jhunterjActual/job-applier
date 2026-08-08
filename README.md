@@ -138,6 +138,8 @@ If you prefer setting up manually or are on macOS/Linux:
 
 The server validates that the candidate set has not changed since the preview. If a search adds or changes jobs, refresh the cleanup preview before continuing.
 
+Permanent deletion also creates a privacy-minimized local suppression record so the same canonical posting does not return during a later search. Open **Clean Up** to review suppressed postings and allow one or all of them to be discovered again; each record stores a URL fingerprint and bounded display labels, not the full posting URL or description.
+
 ### P1 workflow controls
 
 - Use **Mark Applied** on a matched or tailored job to record a manually completed application with its date, method, notes, and follow-up date.

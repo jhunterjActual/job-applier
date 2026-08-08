@@ -1069,7 +1069,8 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
         provider: {
             "raw_candidates": 0, "valid_discovered": 0, "new_candidates": 0,
             "accepted": 0, "rejected": 0, "skipped_active": 0,
-            "skipped_archived": 0, "errors": [], "api_fallbacks": 0,
+            "skipped_archived": 0, "skipped_suppressed": 0,
+            "errors": [], "api_fallbacks": 0,
             "candidate_budget_exhausted": False,
             "partial_results": {
                 "oversized_responses": 0, "candidate_limit_hits": 0, "timeouts": 0,
@@ -1102,9 +1103,16 @@ def run_job_search_and_matching(keywords: str, location: str = "") -> dict:
         canonicalize_job_url(row["url"]): row["status"]
         for row in conn.execute("SELECT url, status FROM jobs").fetchall()
     }
+    from job_suppressions import job_url_fingerprint, suppressed_job_fingerprints
+    suppressed_fingerprints = suppressed_job_fingerprints(conn)
     for item in results:
         url = item["url"]
         provider = provider_for_url(url)
+
+        if job_url_fingerprint(url) in suppressed_fingerprints:
+            if provider in provider_health:
+                provider_health[provider]["skipped_suppressed"] += 1
+            continue
         
         # Compare canonical forms so tracking parameters cannot create duplicates.
         if url in known_urls:

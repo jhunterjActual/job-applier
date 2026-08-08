@@ -4,6 +4,8 @@ import hashlib
 import sqlite3
 from typing import Iterable
 
+from job_suppressions import record_job_suppression
+
 
 ACTIVE_UNTOUCHED_SQL = """
     status = 'matched'
@@ -91,6 +93,19 @@ def apply_cleanup(connection: sqlite3.Connection, action: str, preview_token: st
             ids,
         )
     elif action == "delete":
+        rows = connection.execute(
+            f"SELECT url, company, title FROM jobs WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        for row in rows:
+            record_job_suppression(
+                connection,
+                url=row["url"],
+                company=row["company"],
+                title=row["title"],
+                deleted_at=now,
+                deletion_source="bulk_cleanup",
+            )
         cursor = connection.execute(f"DELETE FROM jobs WHERE id IN ({placeholders})", ids)
     else:
         raise ValueError(f"Unsupported cleanup action: {action}")

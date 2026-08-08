@@ -23,6 +23,7 @@ from searcher import (
 from utils import generate_resume_pdf, find_us_headquarters
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
+from job_suppressions import is_job_suppressed, record_job_suppression
 from materials import material_download_name, persist_cover_letter, resolve_output_file
 from analytics import (
     capture_event,
@@ -32,7 +33,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.1"
+APP_BUILD = "20260808.2"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -343,11 +344,20 @@ def preview_manual_job(req: ManualJobPreviewRequest) -> dict:
         raise HTTPException(status_code=422, detail=reason)
 
     conn = get_db_connection()
+    suppressed = is_job_suppressed(conn, canonical_url)
     existing = conn.execute(
         "SELECT id, title, company, status FROM jobs WHERE url = ?",
         (canonical_url,),
     ).fetchone()
     conn.close()
+    if suppressed:
+        return {
+            "success": True,
+            "duplicate": False,
+            "suppressed": True,
+            "message": "This posting was previously deleted. Clear its suppression in Clean Up before importing it again.",
+            "job": {"url": canonical_url},
+        }
     if existing:
         return {
             "success": True,
@@ -361,11 +371,20 @@ def preview_manual_job(req: ManualJobPreviewRequest) -> dict:
     resolved_url = canonicalize_job_url(details.get("url") or canonical_url)
     if resolved_url != canonical_url:
         conn = get_db_connection()
+        suppressed = is_job_suppressed(conn, resolved_url)
         existing = conn.execute(
             "SELECT id, title, company, status FROM jobs WHERE url = ?",
             (resolved_url,),
         ).fetchone()
         conn.close()
+        if suppressed:
+            return {
+                "success": True,
+                "duplicate": False,
+                "suppressed": True,
+                "message": "This posting was previously deleted. Clear its suppression in Clean Up before importing it again.",
+                "job": {"url": resolved_url},
+            }
         if existing:
             return {
                 "success": True,
@@ -451,6 +470,12 @@ def save_manual_job(req: ManualJobSaveRequest) -> dict:
         # lock. The duplicate check stays inside the transaction to close the
         # race between concurrent imports of the same canonical URL.
         conn.execute("BEGIN IMMEDIATE")
+        if is_job_suppressed(conn, canonical_url):
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="This posting was previously deleted. Clear its suppression in Clean Up before importing it again.",
+            )
         existing = conn.execute(
             "SELECT id, title, company, status FROM jobs WHERE url = ?",
             (canonical_url,),
@@ -599,6 +624,51 @@ def cleanup_jobs(req: CleanupRequest) -> dict:
         "message": f"{affected} untouched job(s) {verbs[req.action]}.",
     }
 
+
+@app.get("/api/job-suppressions")
+def get_job_suppressions() -> dict:
+    """List privacy-minimized deleted-posting records for local review."""
+    conn = get_db_connection()
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM job_suppressions").fetchone()[0]
+        rows = conn.execute(
+            """
+            SELECT id, hostname, company, title, deleted_at, deletion_source
+            FROM job_suppressions
+            ORDER BY deleted_at DESC, id DESC
+            LIMIT 100
+            """
+        ).fetchall()
+        return {"count": count, "items": [dict(row) for row in rows]}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/job-suppressions/{suppression_id}")
+def clear_job_suppression(suppression_id: int) -> dict:
+    """Allow one intentionally deleted posting to be discovered again."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("DELETE FROM job_suppressions WHERE id = ?", (suppression_id,))
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Suppressed posting not found.")
+        return {"success": True, "cleared": 1}
+    finally:
+        conn.close()
+
+
+@app.delete("/api/job-suppressions")
+def clear_all_job_suppressions() -> dict:
+    """Allow all intentionally deleted postings to be discovered again."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.execute("DELETE FROM job_suppressions")
+        conn.commit()
+        return {"success": True, "cleared": cursor.rowcount}
+    finally:
+        conn.close()
+
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: int) -> dict:
     """
@@ -613,17 +683,31 @@ def delete_job(job_id: int) -> dict:
     conn = get_db_connection()
     try:
         # Check if exists
-        job = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        job = conn.execute(
+            "SELECT id, url, company, title FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found.")
-            
+
+        record_job_suppression(
+            conn,
+            url=job["url"],
+            company=job["company"],
+            title=job["title"],
+            deleted_at=datetime.now().isoformat(timespec="seconds"),
+            deletion_source="manual",
+        )
         # Delete corresponding application first to prevent foreign key issues
         conn.execute("DELETE FROM applications WHERE job_id = ?", (job_id,))
         # Delete job
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         conn.commit()
         return {"success": True, "message": "Job posting deleted successfully."}
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception as e:
+        conn.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
     finally:
         conn.close()
