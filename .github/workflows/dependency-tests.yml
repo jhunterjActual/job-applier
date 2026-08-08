@@ -1,0 +1,44 @@
+name: Dependency lock
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  locked-tests:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Verify reviewed update toolchain
+        run: |
+          python -m venv ../.dependency-tools-venv
+          ../.dependency-tools-venv/Scripts/python.exe -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --requirement ../scripts/dependency-tools.txt
+          ../.dependency-tools-venv/Scripts/python.exe -m pip check
+      - name: Install reviewed lock
+        run: python -m pip install --disable-pip-version-check --require-hashes --requirement requirements.txt
+      - name: Verify packages
+        run: python -m pip check
+      - name: Run P0 regressions
+        run: python -m unittest test_p0_regressions.py
+      - name: Run analytics regressions
+        run: python -m unittest test_analytics.py
+      - name: Check Python syntax
+        run: python -m compileall -q .
