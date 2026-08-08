@@ -147,6 +147,8 @@ def init_db() -> None:
         base_resume_id INTEGER,
         base_resume_name TEXT,
         base_resume_version INTEGER,
+        interview_prep TEXT,
+        interview_prep_updated_at TEXT,
         FOREIGN KEY (job_id) REFERENCES jobs(id)
     )
     """)
@@ -246,6 +248,8 @@ def init_db() -> None:
     _add_column_if_missing(cursor, "applications", "base_resume_id", "INTEGER")
     _add_column_if_missing(cursor, "applications", "base_resume_name", "TEXT")
     _add_column_if_missing(cursor, "applications", "base_resume_version", "INTEGER")
+    _add_column_if_missing(cursor, "applications", "interview_prep", "TEXT")
+    _add_column_if_missing(cursor, "applications", "interview_prep_updated_at", "TEXT")
     _add_column_if_missing(cursor, "saved_searches", "schedule_frequency", "TEXT DEFAULT 'none'")
     _add_column_if_missing(cursor, "saved_searches", "next_alert_at", "TEXT")
 

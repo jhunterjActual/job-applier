@@ -48,6 +48,12 @@ from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import is_job_suppressed, record_job_suppression
 from job_filters import derive_job_filter_facets
+from interview_prep import (
+    MAX_INTERVIEW_PREP_CHARS,
+    generate_interview_prep,
+    save_interview_prep,
+    starter_interview_prep,
+)
 from source_diagnostics import list_source_diagnostics, persist_source_diagnostics
 from materials import cover_letter_output_path, material_download_name, persist_cover_letter, resolve_output_file
 from resume_documents import ResumeDocumentError, build_accessible_resume_docx, import_resume_document
@@ -83,7 +89,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.13"
+APP_BUILD = "20260808.14"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -303,6 +309,10 @@ class LifecycleUpdateRequest(BaseModel):
 class MaterialsUpdateRequest(BaseModel):
     tailored_resume: str
     cover_letter: str
+
+
+class InterviewPrepUpdateRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=MAX_INTERVIEW_PREP_CHARS)
 
 
 @app.get("/api/version")
@@ -1895,6 +1905,97 @@ def open_manual_application(job_id: int) -> RedirectResponse:
         },
     )
     return RedirectResponse(material["job_url"], status_code=302)
+
+
+def _interview_prep_record(connection: sqlite3.Connection, job_id: int):
+    return connection.execute("""
+        SELECT a.job_id, a.company, a.position, a.status, a.notes,
+               a.tailored_resume_text, a.interview_prep, a.interview_prep_updated_at,
+               j.title, j.description, j.match_analysis
+        FROM applications a
+        LEFT JOIN jobs j ON j.id = a.job_id
+        WHERE a.job_id = ?
+    """, (job_id,)).fetchone()
+
+
+@app.get("/api/jobs/{job_id}/interview-prep")
+def get_interview_prep(job_id: int) -> dict:
+    """Load saved interview notes or a local starter without calling an AI provider."""
+    conn = get_db_connection()
+    try:
+        record = _interview_prep_record(conn, job_id)
+    finally:
+        conn.close()
+    if not record:
+        raise HTTPException(status_code=404, detail="Application record not found.")
+    saved_content = (record["interview_prep"] or "").strip()
+    return {
+        "job_id": job_id,
+        "company": record["company"],
+        "position": record["position"] or record["title"],
+        "status": record["status"],
+        "content": saved_content or starter_interview_prep(record),
+        "has_saved_content": bool(saved_content),
+        "updated_at": record["interview_prep_updated_at"],
+    }
+
+
+@app.put("/api/jobs/{job_id}/interview-prep")
+def update_interview_prep(job_id: int, req: InterviewPrepUpdateRequest) -> dict:
+    """Persist user-reviewed interview preparation as an atomic local edit."""
+    conn = get_db_connection()
+    try:
+        result = save_interview_prep(conn, job_id, req.content)
+        conn.commit()
+    except LookupError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        conn.close()
+    return {"success": True, **result}
+
+
+@app.post("/api/jobs/{job_id}/interview-prep/generate")
+def generate_job_interview_prep(
+    job_id: int,
+    operation_id: Optional[str] = Header(default=None, alias="X-JobApplier-Operation"),
+) -> dict:
+    """Generate and safely persist an AI-assisted interview plan on explicit request."""
+    with operation_scope(operation_id) as operation:
+        try:
+            operation.checkpoint()
+            conn = get_db_connection()
+            try:
+                record = _interview_prep_record(conn, job_id)
+                profile = conn.execute("SELECT * FROM profile WHERE id = 1").fetchone()
+            finally:
+                conn.close()
+            if not record:
+                raise HTTPException(status_code=404, detail="Application record not found.")
+            if not profile:
+                raise HTTPException(status_code=400, detail="Profile settings were not found.")
+            content = generate_interview_prep(settings_from_profile(profile), record)
+            operation.checkpoint()
+            conn = get_db_connection()
+            try:
+                result = save_interview_prep(conn, job_id, content)
+                conn.commit()
+            finally:
+                conn.close()
+            return {"success": True, **result}
+        except OperationCancelled:
+            return {
+                "success": False,
+                "cancelled": True,
+                "message": "Interview preparation stopped. Previously saved notes were preserved.",
+            }
+        except AIProviderError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 # Applications logs endpoint
 @app.get("/api/applications")
