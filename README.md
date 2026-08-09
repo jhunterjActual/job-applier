@@ -15,46 +15,46 @@ The application features a **FastAPI backend** that doubles as a static file ser
 ## 🌟 Key Features
 
 1. **Intelligent Multi-Platform Discovery**:
-   - Crawls major job boards: **Greenhouse**, **Lever**, **Ashby**, and **SmartRecruiters** using optimized Yahoo Search queries.
-   - Runs domain-specific search queries separately to bypass search engine ranking caps, boosting relevant matches by over 300%.
-   - Generalized to support Greenhouse's modern `job-boards.greenhouse.io` migration.
-   - Uses a modern browser compatibility profile while rejecting job-board fallback and browser-error pages.
+  - Crawls major job boards: **Greenhouse**, **Lever**, **Ashby**, and **SmartRecruiters** using optimized Yahoo Search queries.
+  - Runs domain-specific search queries separately to bypass search engine ranking caps, boosting relevant matches by over 300%.
+  - Generalized to support Greenhouse's modern `job-boards.greenhouse.io` migration.
+  - Uses a modern browser compatibility profile while rejecting job-board fallback and browser-error pages.
 
 2. **Provider-Selectable AI Matching**:
-   - Matches candidate resumes against crawled listings and computes match scores (0-100%) with key pros/cons.
-   - Supports bring-your-own Google Gemini or OpenAI API keys, a user-selected model, and an explicit key/model/capability test without returning credentials to the browser.
-   - **Batch AI Matching**: Groups discovered job listings into a single structured-output request to reduce provider quota usage.
-   - **Keyword Caching**: Analyzes your resume to auto-suggest and store search terms, preventing redundant API calls.
+  - Matches candidate resumes against crawled listings and computes match scores (0-100%) with key pros/cons.
+  - Supports bring-your-own Google Gemini or OpenAI API keys, a user-selected model, and an explicit key/model/capability test without returning credentials to the browser.
+  - **Batch AI Matching**: Groups discovered job listings into a single structured-output request to reduce provider quota usage.
+  - **Keyword Caching**: Analyzes your resume to auto-suggest and store search terms, preventing redundant API calls.
 
 3. **Combined Resume & Cover Letter Tailoring (50% Quota Savings)**:
-   - Rewrites your resume highlights for specific postings and drafts custom cover letters.
-   - Uses a single consolidated, schema-validated provider request returning JSON instead of separate resume and cover-letter calls.
-   - Converts Markdown and plain text outputs into polished, print-ready PDF files using Playwright.
+  - Rewrites your resume highlights for specific postings and drafts custom cover letters.
+  - Uses a single consolidated, schema-validated provider request returning JSON instead of separate resume and cover-letter calls.
+  - Converts Markdown and plain text outputs into polished, print-ready PDF files using Playwright.
 
 4. **Provider-Selectable Headquarters Resolution**:
-   - Automatically queries and logs the full street address (including ZIP code/international details) of company headquarters.
-   - Supports bring-your-own-key **Google Places** or rate-limited **OpenStreetMap Nominatim**, with successful OpenStreetMap results cached locally and provider attribution retained in application history.
-   - Uses the selected AI provider only as a clearly labeled, verify-before-filing fallback when the maps lookup cannot verify an address.
+  - Automatically queries and logs the full street address (including ZIP code/international details) of company headquarters.
+  - Supports bring-your-own-key **Google Places** or rate-limited **OpenStreetMap Nominatim**, with successful OpenStreetMap results cached locally and provider attribution retained in application history.
+  - Uses the selected AI provider only as a clearly labeled, verify-before-filing fallback when the maps lookup cannot verify an address.
 
 5. **Guided Manual Applications**:
-   - Reviews and saves tailored materials before application work begins.
-   - Provides explicit, recruiter-friendly Resume PDF and Cover Letter TXT downloads.
-   - Opens the verified employer posting in a new tab; you complete the employer's form and then confirm the lifecycle state with **Mark Applied**.
+  - Reviews and saves tailored materials before application work begins.
+  - Provides explicit, recruiter-friendly Resume PDF and Cover Letter TXT downloads.
+  - Opens the verified employer posting in a new tab; you complete the employer's form and then confirm the lifecycle state with **Mark Applied**.
 
 6. **Local Security**:
-   - Stored completely on your local machine. Profile details and private API keys stay in local SQLite (`data/jobapplier.db`), while generated PDF and TXT artifacts remain in the ignored local output directory.
+  - Stored completely on your local machine. Profile details and private API keys stay in local SQLite (`data/jobapplier.db`), while generated PDF and TXT artifacts remain in the ignored local output directory.
 
 7. **Practical Job Filters**:
-   - Narrows the saved-job list by pay or contract rate, employment type, remote/hybrid/on-site arrangement, shift and on-call expectations, travel, sponsorship, clearance, professional license, and physical/outdoor work signals.
-   - Derives filter signals locally with deterministic text rules. Unspecified details remain included by default, and filtering does not change match scores or send posting details to an AI provider.
+  - Narrows the saved-job list by pay or contract rate, employment type, remote/hybrid/on-site arrangement, shift and on-call expectations, travel, sponsorship, clearance, professional license, and physical/outdoor work signals.
+  - Derives filter signals locally with deterministic text rules. Unspecified details remain included by default, and filtering does not change match scores or send posting details to an AI provider.
 
 8. **Role-Specific Professional Evidence**:
-   - Stores skills, projects, portfolio links, licenses, certifications, and work samples with each named base resume, including its non-destructive version history.
-   - Provides guidance for each resume mode and sends only the candidate's entered evidence to the selected AI provider during user-triggered tailoring. Missing issuers, dates, outcomes, metrics, or credential status must not be inferred.
+  - Stores skills, projects, portfolio links, licenses, certifications, and work samples with each named base resume, including its non-destructive version history.
+  - Provides guidance for each resume mode and sends only the candidate's entered evidence to the selected AI provider during user-triggered tailoring. Missing issuers, dates, outcomes, metrics, or credential status must not be inferred.
 
 9. **Local Application Effectiveness Insights**:
-   - Summarizes confirmed applications, employer responses, interviews, offers, rejections, response rates, and recorded response timing directly on the dashboard.
-   - Breaks outcomes down by job source, role, location, source resume version, and application method without sending application history to an analytics or AI provider. Percentages from small samples are explicitly presented as directional rather than predictive.
+  - Summarizes confirmed applications, employer responses, interviews, offers, rejections, response rates, and recorded response timing directly on the dashboard.
+  - Breaks outcomes down by job source, role, location, source resume version, and application method without sending application history to an analytics or AI provider. Percentages from small samples are explicitly presented as directional rather than predictive.
 
 10. **Interview Preparation Workspace**:
    - Opens a local, editable preparation plan from Application Logs with company-research prompts, likely questions, truthful STAR-story planning, questions for the hiring team, logistics, and follow-up notes.
