@@ -61,7 +61,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [x] Add local application-funnel and response-rate analytics by source, role, location, resume version, and application method, with clear response definitions, outcome counts, timing, and small-sample guidance.
 - [x] Add an interview-preparation workspace with role-specific research prompts, likely questions, candidate evidence/STAR-story planning, questions for the hiring team, editable notes, and printable or downloadable output.
 - [x] Add a versioned, human-readable local data export covering profile settings, resume history, jobs, applications, saved searches, deletion choices, and privacy-safe diagnostics while excluding stored API keys, host file paths, URL fingerprints, and provider caches.
-- [ ] Add password-encrypted full backup and safe restore with compatibility checks, explicit conflict handling, and recovery from interrupted imports.
+- [x] Add password-encrypted full backup and safe restore with compatibility checks, explicit conflict handling, and recovery from interrupted imports.
 - [ ] Add multilingual assistance for profile guidance, search workflows, generated-material review, and user-facing validation without silently translating factual resume content.
 - [ ] Complete a mobile-responsiveness and accessibility QA pass across keyboard, screen-reader, contrast, focus, motion, zoom, reflow, modal, table, and document workflows.
 - [ ] Design an opt-in, privacy-preserving provider-failure reporting mechanism for broader releases so repeated format-drift alerts can notify maintainers without transmitting resumes, API keys, job-application data, or unnecessary browsing details.

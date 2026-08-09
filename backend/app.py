@@ -6,11 +6,14 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Lock
 from urllib.parse import urlsplit
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from typing import Literal, Optional
 from datetime import date, datetime, timedelta
 
@@ -35,7 +38,16 @@ from maps_providers import (
 )
 from application_insights import build_application_insights
 from data_export import build_user_data_export
-from database import get_db_connection
+from database import get_db_connection, init_db
+from backup_restore import (
+    MAXIMUM_BACKUP_BYTES,
+    BackupAuthenticationError,
+    BackupCompatibilityError,
+    BackupPasswordError,
+    BackupRestoreError,
+    create_encrypted_backup,
+    restore_encrypted_backup,
+)
 from tailor import analyze_job_match, apply_resume_section_template, finalize_cover_letter, tailor_resume_and_cover_letter
 from searcher import (
     MAX_JOB_DESCRIPTION_CHARS,
@@ -91,11 +103,12 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.16"
+APP_BUILD = "20260808.17"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
+BACKUP_RESTORE_LOCK = Lock()
 
 
 def _headquarters_cache_key(
@@ -315,6 +328,10 @@ class MaterialsUpdateRequest(BaseModel):
 
 class InterviewPrepUpdateRequest(BaseModel):
     content: str = Field(min_length=1, max_length=MAX_INTERVIEW_PREP_CHARS)
+
+
+class FullBackupRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
 
 
 @app.get("/api/version")
@@ -1226,6 +1243,156 @@ def export_user_data() -> StreamingResponse:
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+def _remove_temporary_download(path: Path) -> None:
+    """Best-effort cleanup after Starlette finishes streaming a generated download."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+@app.post("/api/full-backup")
+def download_full_backup(
+    req: FullBackupRequest,
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
+):
+    """Create an authenticated encrypted download of the database and generated materials."""
+    if not BACKUP_RESTORE_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Another backup or restore is already in progress.")
+    operation = start_operation(operation_id)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=".career-trellis-backup-",
+            suffix=".ctbackup",
+            dir=config.DATA_DIR,
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+        summary = create_encrypted_backup(
+            temporary_path,
+            req.password,
+            database_path=config.DB_PATH,
+            output_dir=config.OUTPUT_DIR,
+            application_build=APP_BUILD,
+            checkpoint=operation.checkpoint,
+        )
+        filename = f"career-trellis-full-backup-{date.today().isoformat()}.ctbackup"
+        response = FileResponse(
+            temporary_path,
+            media_type="application/vnd.careertrellis.backup",
+            filename=filename,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "X-CareerTrellis-Backup-Materials": str(summary.material_file_count),
+                "X-CareerTrellis-Backup-Warnings": str(summary.warning_count),
+            },
+            background=BackgroundTask(_remove_temporary_download, temporary_path),
+        )
+        temporary_path = None
+        return response
+    except OperationCancelled:
+        return JSONResponse({
+            "success": False,
+            "cancelled": True,
+            "message": "Backup stopped before a download was created.",
+        })
+    except BackupPasswordError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BackupRestoreError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="CareerTrellis could not create the encrypted backup.") from exc
+    finally:
+        if temporary_path:
+            _remove_temporary_download(temporary_path)
+        finish_operation(operation)
+        BACKUP_RESTORE_LOCK.release()
+
+
+@app.post("/api/full-backup/restore")
+async def restore_full_backup(
+    file: UploadFile = File(...),
+    password: str = Form(..., min_length=1, max_length=1024),
+    confirm_replace: bool = Form(False),
+    operation_id: Optional[str] = Header(default=None, alias="X-CareerTrellis-Operation"),
+) -> dict:
+    """Restore a validated full backup and retain the replaced workspace for recovery."""
+    if not confirm_replace:
+        await file.close()
+        raise HTTPException(status_code=400, detail="Confirm that the current workspace will be replaced.")
+    if Path(file.filename or "").suffix.lower() != ".ctbackup":
+        await file.close()
+        raise HTTPException(status_code=400, detail="Choose a CareerTrellis .ctbackup file.")
+    if not BACKUP_RESTORE_LOCK.acquire(blocking=False):
+        await file.close()
+        raise HTTPException(status_code=409, detail="Another backup or restore is already in progress.")
+
+    operation = start_operation(operation_id)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix=".career-trellis-restore-",
+            suffix=".ctbackup",
+            dir=config.DATA_DIR,
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            copied = 0
+            while chunk := await file.read(1024 * 1024):
+                operation.checkpoint()
+                copied += len(chunk)
+                if copied > MAXIMUM_BACKUP_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="The encrypted backup exceeds the supported 2 GB size.",
+                    )
+                temporary.write(chunk)
+        operation.checkpoint()
+        summary = await run_in_threadpool(
+            restore_encrypted_backup,
+            temporary_path,
+            password,
+            database_path=config.DB_PATH,
+            output_dir=config.OUTPUT_DIR,
+            recovery_root=config.DATA_DIR / "restore-recovery",
+            application_build=APP_BUILD,
+            checkpoint=operation.checkpoint,
+            post_restore_check=init_db,
+        )
+        return {
+            "success": True,
+            "message": "Backup restored. The previous workspace was retained for local recovery.",
+            "backup_created_at": summary.backup_created_at,
+            "backup_application_build": summary.backup_application_build,
+            "material_file_count": summary.material_file_count,
+            "recovery_folder": Path(summary.recovery_directory).name,
+        }
+    except OperationCancelled:
+        return {
+            "success": False,
+            "cancelled": True,
+            "message": "Restore stopped before the current workspace was replaced.",
+        }
+    except HTTPException:
+        raise
+    except (BackupPasswordError, BackupAuthenticationError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BackupCompatibilityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BackupRestoreError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="CareerTrellis could not safely restore this backup.") from exc
+    finally:
+        await file.close()
+        if temporary_path:
+            _remove_temporary_download(temporary_path)
+        finish_operation(operation)
+        BACKUP_RESTORE_LOCK.release()
 
 
 @app.get("/api/source-diagnostics/export")

@@ -593,6 +593,18 @@ a:hover {
     flex: 0 0 auto;
 }
 
+.data-portability-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 220px;
+}
+
+.data-portability-actions .btn {
+    justify-content: center;
+}
+
 /* Form Styles */
 .form-grid {
     display: grid;
@@ -637,6 +649,28 @@ select {
     font-family: var(--font-body);
     font-size: 14.5px;
     transition: var(--transition-smooth);
+}
+
+input[type="file"] {
+    width: 100%;
+    padding: 10px;
+    background-color: hsla(222, 47%, 4%, 0.4);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+}
+
+input[type="file"]::file-selector-button {
+    margin-right: 12px;
+    padding: 8px 12px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
 }
 
 input:focus,
@@ -1472,6 +1506,59 @@ select:focus {
     max-width: 420px;
 }
 
+.modal-narrow-content {
+    max-width: 620px;
+}
+
+.backup-security-notice {
+    align-items: flex-start;
+    background: rgba(82, 166, 255, 0.09);
+    border: 1px solid rgba(82, 166, 255, 0.3);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    display: flex;
+    gap: 12px;
+    padding: 16px;
+}
+
+.backup-security-notice > i {
+    color: var(--color-primary);
+    font-size: 18px;
+    margin-top: 2px;
+}
+
+.backup-security-notice strong {
+    color: var(--text-primary);
+}
+
+.backup-security-notice p {
+    margin-top: 6px;
+}
+
+.backup-security-notice.destructive-notice {
+    background: rgba(255, 77, 90, 0.08);
+    border-color: rgba(255, 77, 90, 0.3);
+}
+
+.backup-security-notice.destructive-notice > i {
+    color: var(--color-red);
+}
+
+.restore-confirmation {
+    align-items: flex-start;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    gap: 10px;
+    padding: 13px 14px;
+}
+
+.restore-confirmation input {
+    flex: 0 0 auto;
+    margin-top: 3px;
+}
+
 .modal-header {
     display: flex;
     justify-content: space-between;
@@ -2010,6 +2097,11 @@ select:focus {
     }
 
     .data-portability-body .btn {
+        width: 100%;
+    }
+
+    .data-portability-actions {
+        min-width: 0;
         width: 100%;
     }
 }
