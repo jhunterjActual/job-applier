@@ -110,13 +110,16 @@ from analytics import (
     shutdown_analytics,
     source_category,
 )
+from observability import initialize_sentry, sentry_debug_enabled
 
-APP_BUILD = "20260808.19"
+APP_BUILD = "20260808.20"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SAFE_HTTP_METHODS = {"GET", "HEAD", "OPTIONS"}
 BACKUP_RESTORE_LOCK = Lock()
+
+initialize_sentry(APP_BUILD)
 
 
 def _headquarters_cache_key(
@@ -357,6 +360,14 @@ class FullBackupRequest(BaseModel):
 def get_app_version() -> dict:
     """Identify the running backend so launchers never open a stale instance."""
     return {"build": APP_BUILD}
+
+
+@app.get("/sentry-debug", include_in_schema=False)
+def trigger_sentry_debug_error() -> None:
+    """Raise a test error only while explicit local Sentry verification is enabled."""
+    if not sentry_debug_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    raise RuntimeError("Intentional Sentry verification error")
 
 # Profile endpoints
 @app.get("/api/profile")

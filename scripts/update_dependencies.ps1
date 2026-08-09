@@ -85,6 +85,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "P0 regression tests failed with the generated lock." }
         & $ValidationPython -m unittest test_analytics.py
         if ($LASTEXITCODE -ne 0) { throw "Analytics tests failed with the generated lock." }
+        & $ValidationPython -m unittest test_observability.py
+        if ($LASTEXITCODE -ne 0) { throw "Observability tests failed with the generated lock." }
         & $ValidationPython -m compileall -q .
         if ($LASTEXITCODE -ne 0) { throw "Python syntax validation failed with the generated lock." }
     } finally {

@@ -42,5 +42,7 @@ jobs:
         run: python -m unittest test_p0_regressions.py
       - name: Run analytics regressions
         run: python -m unittest test_analytics.py
+      - name: Run observability regressions
+        run: python -m unittest test_observability.py
       - name: Check Python syntax
         run: python -m compileall -q .

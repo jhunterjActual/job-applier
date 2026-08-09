@@ -965,7 +965,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.19", source)
+                self.assertIn("20260808.20", source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -1205,7 +1205,7 @@ class DependencyLockTests(unittest.TestCase):
         self.assertEqual(
             {
                 "cryptography", "exceptiongroup", "fastapi", "google-genai", "playwright", "posthog",
-                "pydantic", "pymupdf", "python-docx", "python-multipart", "uvicorn",
+                "pydantic", "pymupdf", "python-docx", "python-multipart", "sentry-sdk", "uvicorn",
             },
             direct_names,
         )
@@ -1332,6 +1332,7 @@ class DependencyLockTests(unittest.TestCase):
         self.assertIn("--require-hashes", script)
         self.assertIn("test_p0_regressions.py", script)
         self.assertIn("test_analytics.py", script)
+        self.assertIn("test_observability.py", script)
         self.assertIn("pip check", script)
         self.assertIn("[IO.File]::Replace", script)
         self.assertIn("Find-UpdatePython", script)
@@ -1345,6 +1346,7 @@ class DependencyLockTests(unittest.TestCase):
         self.assertIn("python -m playwright install chromium", workflow)
         self.assertIn("test_p0_regressions.py", workflow)
         self.assertIn("test_analytics.py", workflow)
+        self.assertIn("test_observability.py", workflow)
 
 
 class ProfileSecretPresenceTests(unittest.TestCase):
@@ -1726,7 +1728,7 @@ class UserDataExportTests(unittest.TestCase):
 
 class EncryptedFullBackupTests(unittest.TestCase):
     PASSWORD = "correct horse battery staple"
-    BUILD = "20260808.19"
+    BUILD = "20260808.20"
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
