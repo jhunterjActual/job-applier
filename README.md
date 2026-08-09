@@ -4,6 +4,7 @@
 
 See [PRODUCT_BACKLOG.md](PRODUCT_BACKLOG.md) for the consolidated implementation and product roadmap.
 See [BRAND_NAMING.md](BRAND_NAMING.md) for the working-name rationale, voice guardrails, and pre-launch clearance checklist.
+See [PROVIDER_FAILURE_REPORTING.md](PROVIDER_FAILURE_REPORTING.md) for the review-before-sharing diagnostic-report contract and privacy boundary.
 
 A self-contained, privacy-first workspace designed to streamline job discovery, resume tailoring, guided-manual applications, progress tracking, and interview preparation.
 
@@ -189,6 +190,7 @@ Permanent deletion also creates a privacy-minimized local suppression record so 
 - Provider health diagnostics distinguish stale postings, access challenges, provider failures, and likely ATS URL or data-format changes instead of silently hiding a failing source. Lever details use its public Postings API first and fall back to browser extraction only when that API is unavailable.
 - Remote searches use explicit time, download-size, candidate-count, and retained-description budgets. When a provider reaches one of those limits, completed results remain available and **Search notes** explains why that provider's results may be partial.
 - Source warnings and search notes can be dismissed for the current view. **Source diagnostics** retains the newest 500 local notices for later review, JSON export, or explicit clearing. History contains only timestamps, allowlisted provider/code values, and bounded aggregate counters; it excludes searches, locations, URLs, job details, resumes, credentials, rendered messages, and raw errors.
+- When an actionable source warning may need maintainer attention, **Prepare Maintainer Report** creates a minimized local preview grouped by provider and diagnostic code. Nothing is sent automatically: copying stays on the device, while **Open GitHub Issue Draft** sends exactly the displayed report to `github.com` in a still-editable draft only after the user clicks it. Stale-posting and ordinary partial-result notes are excluded.
 - Select the named base resume and its resume mode under **Profile & Resume** before tailoring. The selected resume and version are recorded with newly generated materials for future outcome analysis. Generated resume and cover-letter text can be edited in **View Materials**; **Save Edits** regenerates both downloadable artifacts.
 - Each resume mode uses a deterministic section template before PDF generation. Manual application dates accept direct `MM/DD/YYYY` or `YYYY-MM-DD` entry and also provide a calendar picker.
 

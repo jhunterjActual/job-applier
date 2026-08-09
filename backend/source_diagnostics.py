@@ -1,7 +1,9 @@
 """Privacy-safe persistence for job-source health notices."""
 
 import json
+import re
 import sqlite3
+from datetime import date
 
 
 ALLOWED_PROVIDERS = frozenset({"greenhouse", "lever", "ashby", "smartrecruiters"})
@@ -19,6 +21,14 @@ MAX_ALERTS_PER_RUN = 20
 MAX_HISTORY_RECORDS = 500
 DEFAULT_HISTORY_LIMIT = 100
 MAX_HISTORY_LIMIT = 500
+MAX_REPORT_GROUPS = 16
+
+REPORTABLE_CODES = frozenset({
+    "url_format_drift",
+    "content_format_drift",
+    "access_challenge",
+    "provider_error",
+})
 
 DIRECT_COUNTERS = (
     "raw_candidates",
@@ -43,6 +53,23 @@ STORED_COUNTERS = DIRECT_COUNTERS + REJECTION_COUNTERS + PARTIAL_COUNTERS + (
     "search_errors",
     "candidate_budget_exhausted",
 )
+REPORT_COUNTERS = (
+    "raw_candidates",
+    "valid_discovered",
+    "new_candidates",
+    "accepted",
+    "rejected",
+    "api_fallbacks",
+    "format_drift",
+    "access_challenge",
+    "embedded_content",
+    "provider_error",
+    "timeouts",
+    "search_errors",
+)
+
+_SAFE_BUILD_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,32}$")
+_ISO_DAY_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 
 
 def _bounded_counter(value: object) -> int:
@@ -148,3 +175,130 @@ def list_source_diagnostics(connection: sqlite3.Connection, limit: int = DEFAULT
             "counters": counters,
         })
     return {"count": count, "items": items}
+
+
+def _safe_day(value: object) -> str:
+    match = _ISO_DAY_PATTERN.match(str(value or ""))
+    if not match:
+        return "unknown"
+    try:
+        return date.fromisoformat(match.group(1)).isoformat()
+    except ValueError:
+        return "unknown"
+
+
+def build_maintainer_report(
+    history: dict | None,
+    application_build: str,
+    generated_on: str,
+) -> dict:
+    """Aggregate only allowlisted local diagnostics for an explicit user-reviewed report."""
+    items = history.get("items") if isinstance(history, dict) else []
+    items = items if isinstance(items, list) else []
+    groups: dict[tuple[str, str], dict] = {}
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        provider = str(item.get("provider") or "").lower()
+        code = str(item.get("code") or "").lower()
+        if provider not in ALLOWED_PROVIDERS or code not in REPORTABLE_CODES:
+            continue
+        recorded_at = str(item.get("recorded_at") or "")
+        observed_on = _safe_day(recorded_at)
+        stored = item.get("counters")
+        stored = stored if isinstance(stored, dict) else {}
+        counters = {name: _bounded_counter(stored.get(name)) for name in REPORT_COUNTERS}
+        key = (provider, code)
+        group = groups.setdefault(key, {
+            "provider": provider,
+            "code": code,
+            "occurrences": 0,
+            "first_seen_on": observed_on,
+            "last_seen_on": observed_on,
+            "latest_counters": counters,
+            "_latest_recorded_at": recorded_at,
+        })
+        group["occurrences"] = min(MAX_HISTORY_RECORDS, group["occurrences"] + 1)
+        known_days = [day for day in (group["first_seen_on"], observed_on) if day != "unknown"]
+        group["first_seen_on"] = min(known_days) if known_days else "unknown"
+        known_days = [day for day in (group["last_seen_on"], observed_on) if day != "unknown"]
+        group["last_seen_on"] = max(known_days) if known_days else "unknown"
+        if recorded_at >= group["_latest_recorded_at"]:
+            group["_latest_recorded_at"] = recorded_at
+            group["latest_counters"] = counters
+
+    report_groups = sorted(
+        groups.values(),
+        key=lambda group: (-group["occurrences"], group["provider"], group["code"]),
+    )[:MAX_REPORT_GROUPS]
+    for group in report_groups:
+        group.pop("_latest_recorded_at", None)
+
+    normalized_build = str(application_build or "")
+    safe_build = normalized_build if _SAFE_BUILD_PATTERN.fullmatch(normalized_build) else "unknown"
+    return {
+        "report_version": 1,
+        "application_build": safe_build,
+        "generated_on": _safe_day(generated_on),
+        "reportable_event_count": sum(group["occurrences"] for group in report_groups),
+        "repeated_group_count": sum(1 for group in report_groups if group["occurrences"] > 1),
+        "diagnostic_groups": report_groups,
+        "privacy": {
+            "included": [
+                "application build",
+                "calendar dates",
+                "allowlisted provider and diagnostic codes",
+                "occurrence counts",
+                "bounded aggregate source counters",
+            ],
+            "excluded": [
+                "profile and resume content",
+                "API keys and credentials",
+                "search terms and locations",
+                "job URLs, titles, employers, and descriptions",
+                "application history and generated materials",
+                "raw errors and browsing details",
+            ],
+        },
+    }
+
+
+def format_maintainer_report(report: dict) -> str:
+    """Render a compact report that users can review before sharing with maintainers."""
+    lines = [
+        "## CareerTrellis source diagnostic report",
+        "",
+        f"- Report format: {int(report.get('report_version') or 1)}",
+        f"- Application build: {report.get('application_build') or 'unknown'}",
+        f"- Generated on: {report.get('generated_on') or 'unknown'}",
+        f"- Reportable events: {int(report.get('reportable_event_count') or 0)}",
+        f"- Repeated provider/code groups: {int(report.get('repeated_group_count') or 0)}",
+        "",
+        "### Sanitized diagnostic groups",
+        "",
+    ]
+    for group in report.get("diagnostic_groups") or []:
+        repeated = " (repeated)" if int(group.get("occurrences") or 0) > 1 else ""
+        lines.append(
+            f"- `{group.get('provider')}` / `{group.get('code')}`: "
+            f"{int(group.get('occurrences') or 0)} occurrence(s){repeated}; "
+            f"observed {group.get('first_seen_on')} through {group.get('last_seen_on')}"
+        )
+        counters = group.get("latest_counters") if isinstance(group.get("latest_counters"), dict) else {}
+        values = [
+            f"{name}={_bounded_counter(counters.get(name))}"
+            for name in REPORT_COUNTERS
+            if _bounded_counter(counters.get(name)) > 0
+        ]
+        lines.append(f"  - Latest bounded counters: {', '.join(values) if values else 'none recorded'}")
+
+    lines.extend([
+        "",
+        "### Privacy review",
+        "",
+        "This report was generated from CareerTrellis's minimized local source-diagnostic history.",
+        "It excludes profile/resume content, credentials, searches, locations, job and application data, URLs, raw errors, and browsing details.",
+        "Nothing is submitted automatically; the user reviewed this text before sharing it.",
+    ])
+    return "\n".join(lines)

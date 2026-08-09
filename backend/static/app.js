@@ -222,9 +222,20 @@ const sourceDiagnosticsList = document.getElementById("source-diagnostics-list")
 const sourceDiagnosticsEmpty = document.getElementById("source-diagnostics-empty");
 const clearSourceDiagnosticsBtn = document.getElementById("clear-source-diagnostics-btn");
 const exportSourceDiagnosticsBtn = document.getElementById("export-source-diagnostics-btn");
+const prepareMaintainerReportBtn = document.getElementById("prepare-maintainer-report-btn");
 const closeSourceDiagnosticsBtns = [
     document.getElementById("close-source-diagnostics-modal"),
     document.getElementById("close-source-diagnostics-modal-btn")
+].filter(Boolean);
+const maintainerReportModal = document.getElementById("maintainer-report-modal");
+const maintainerReportSummary = document.getElementById("maintainer-report-summary");
+const maintainerReportPreview = document.getElementById("maintainer-report-preview");
+const maintainerReportStatus = document.getElementById("maintainer-report-status");
+const copyMaintainerReportBtn = document.getElementById("copy-maintainer-report-btn");
+const openGithubReportBtn = document.getElementById("open-github-report-btn");
+const closeMaintainerReportBtns = [
+    document.getElementById("close-maintainer-report-modal"),
+    document.getElementById("close-maintainer-report-modal-btn")
 ].filter(Boolean);
 const lifecycleModal = document.getElementById("lifecycle-modal");
 const lifecycleForm = document.getElementById("lifecycle-form");
@@ -365,6 +376,9 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(openSourceDiagnosticsBtn, "click", showSourceDiagnostics);
     closeSourceDiagnosticsBtns.forEach(btn => btn.addEventListener("click", hideSourceDiagnostics));
     bindEvent(clearSourceDiagnosticsBtn, "click", clearSourceDiagnostics);
+    bindEvent(prepareMaintainerReportBtn, "click", showMaintainerReport);
+    closeMaintainerReportBtns.forEach(btn => btn.addEventListener("click", hideMaintainerReport));
+    bindEvent(copyMaintainerReportBtn, "click", copyMaintainerReport);
     bindEvent(lifecycleForm, "submit", saveLifecycleChange);
     bindEvent(document.getElementById("close-lifecycle-modal"), "click", hideLifecycleModal);
     bindEvent(document.getElementById("cancel-lifecycle-btn"), "click", hideLifecycleModal);
@@ -553,6 +567,7 @@ function setupAccessibleModals() {
         [fullRestoreModal, hideFullRestoreModal],
         [jobImportModal, hideJobImportModal],
         [sourceDiagnosticsModal, hideSourceDiagnostics],
+        [maintainerReportModal, hideMaintainerReport],
         [cleanupModal, hideCleanupModal],
         [tailorModal, hideTailorModal],
         [lifecycleModal, hideLifecycleModal],
@@ -2554,6 +2569,61 @@ function hideSourceDiagnostics() {
     closeAccessibleModal(sourceDiagnosticsModal);
 }
 
+function hideMaintainerReport() {
+    closeAccessibleModal(maintainerReportModal);
+    maintainerReportStatus.textContent = "";
+    openGithubReportBtn.hidden = true;
+    openGithubReportBtn.removeAttribute("href");
+}
+
+async function showMaintainerReport() {
+    prepareMaintainerReportBtn.disabled = true;
+    let canReport = true;
+    try {
+        const response = await fetch(`${API_URL}/api/source-diagnostics/maintainer-report`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "The maintainer report could not be prepared.");
+        canReport = Boolean(result.can_report);
+        if (!canReport) {
+            alert("No source diagnostics needing maintainer attention are available to report.");
+            return;
+        }
+
+        const report = result.report || {};
+        const eventCount = Number(report.reportable_event_count || 0);
+        const repeatedCount = Number(report.repeated_group_count || 0);
+        maintainerReportSummary.textContent = `${eventCount} reportable event${eventCount === 1 ? "" : "s"} across ${report.diagnostic_groups?.length || 0} provider/code group${report.diagnostic_groups?.length === 1 ? "" : "s"}; ${repeatedCount} repeated.`;
+        maintainerReportPreview.value = String(result.markdown || "");
+        maintainerReportStatus.textContent = "Review every line before choosing how to share it.";
+
+        const issueUrl = new URL("https://github.com/jhunterjActual/job-applier/issues/new");
+        issueUrl.searchParams.set("title", String(result.issue_title || "[Source diagnostics] CareerTrellis provider report"));
+        issueUrl.searchParams.set("body", maintainerReportPreview.value);
+        openGithubReportBtn.href = issueUrl.toString();
+        openGithubReportBtn.hidden = false;
+        prepareMaintainerReportBtn.disabled = false;
+        prepareMaintainerReportBtn.focus({ preventScroll: true });
+        openAccessibleModal(maintainerReportModal, maintainerReportPreview);
+    } catch (error) {
+        alert(error.message || "The maintainer report could not be prepared.");
+    } finally {
+        prepareMaintainerReportBtn.disabled = !canReport;
+    }
+}
+
+async function copyMaintainerReport() {
+    const report = maintainerReportPreview.value;
+    if (!report) return;
+    try {
+        if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+        await navigator.clipboard.writeText(report);
+        maintainerReportStatus.textContent = "Report copied. Nothing was sent to a maintainer.";
+        announce("Maintainer report copied.");
+    } catch {
+        maintainerReportStatus.textContent = "The report could not be copied automatically. Select the preview text and copy it manually.";
+    }
+}
+
 async function loadSourceDiagnostics() {
     const response = await fetch(`${API_URL}/api/source-diagnostics?limit=100`);
     const result = await response.json();
@@ -2564,6 +2634,7 @@ async function loadSourceDiagnostics() {
     sourceDiagnosticsEmpty.textContent = "No source diagnostics have been recorded.";
     clearSourceDiagnosticsBtn.disabled = result.count === 0;
     exportSourceDiagnosticsBtn.hidden = result.count === 0;
+    prepareMaintainerReportBtn.disabled = !result.items.some(item => item.level === "attention");
     sourceDiagnosticsCount.textContent = String(result.count || 0);
     sourceDiagnosticsCount.hidden = result.count === 0;
 

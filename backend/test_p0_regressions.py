@@ -100,6 +100,8 @@ from searcher import (
 )
 from source_diagnostics import (
     MAX_COUNTER_VALUE,
+    build_maintainer_report,
+    format_maintainer_report,
     list_source_diagnostics,
     persist_source_diagnostics,
 )
@@ -916,7 +918,10 @@ class FrontendStartupTests(unittest.TestCase):
             "open-source-diagnostics-btn", "source-diagnostics-count",
             "source-diagnostics-modal", "source-diagnostics-list",
             "source-diagnostics-empty", "clear-source-diagnostics-btn",
-            "export-source-diagnostics-btn",
+            "export-source-diagnostics-btn", "prepare-maintainer-report-btn",
+            "maintainer-report-modal", "maintainer-report-preview",
+            "maintainer-report-summary", "maintainer-report-status",
+            "copy-maintainer-report-btn", "open-github-report-btn",
             "loading-actions", "stop-loading-btn",
             "base-resume-select", "p-resume-name", "new-base-resume-btn",
             "duplicate-base-resume-btn", "base-resume-history-btn",
@@ -957,8 +962,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-21", html_source)
-        self.assertIn("index.css?v=20260808-21", html_source)
+        self.assertIn("app.js?v=20260808-22", html_source)
+        self.assertIn("index.css?v=20260808-22", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -966,7 +971,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.21", source)
+                self.assertIn("20260808.22", source)
 
     def test_workspace_accessibility_and_mobile_reflow_contract(self) -> None:
         static_dir = Path(__file__).parent / "static"
@@ -984,7 +989,7 @@ class FrontendStartupTests(unittest.TestCase):
 
         modal_ids = (
             "full-backup-modal", "full-restore-modal", "job-import-modal",
-            "source-diagnostics-modal", "cleanup-modal", "tailor-modal",
+            "source-diagnostics-modal", "maintainer-report-modal", "cleanup-modal", "tailor-modal",
             "lifecycle-modal", "interview-prep-modal", "engagement-modal",
             "base-resume-history-modal", "loading-modal",
         )
@@ -1212,6 +1217,20 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertNotIn("sourceDiagnosticsList.innerHTML", script_source)
         self.assertIn(".provider-alert-dismiss:focus-visible", css_source)
         self.assertIn("@media (max-width: 620px)", css_source)
+
+    def test_maintainer_reporting_is_explicit_review_before_share(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+        script_source = (static_dir / "app.js").read_text(encoding="utf-8")
+        self.assertIn("Nothing is sent automatically.", html_source)
+        self.assertIn('id="maintainer-report-preview" readonly', html_source)
+        self.assertIn('id="open-github-report-btn" target="_blank" rel="noopener noreferrer" hidden', html_source)
+        self.assertIn("function showMaintainerReport", script_source)
+        self.assertIn("/api/source-diagnostics/maintainer-report", script_source)
+        self.assertIn('new URL("https://github.com/jhunterjActual/job-applier/issues/new")', script_source)
+        self.assertIn("navigator.clipboard?.writeText", script_source)
+        self.assertIn("prepareMaintainerReportBtn.focus({ preventScroll: true })", script_source)
+        self.assertNotIn("window.open(", script_source)
 
     def test_startup_activity_reflects_loaded_profile_state(self) -> None:
         static_dir = Path(__file__).parent / "static"
@@ -1780,7 +1799,7 @@ class UserDataExportTests(unittest.TestCase):
 
 class EncryptedFullBackupTests(unittest.TestCase):
     PASSWORD = "correct horse battery staple"
-    BUILD = "20260808.21"
+    BUILD = "20260808.22"
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -3166,6 +3185,75 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
             [item["recorded_at"] for item in history["items"]],
         )
 
+    def test_maintainer_report_groups_repeated_actionable_events_and_minimizes_data(self) -> None:
+        history = {
+            "items": [
+                {
+                    "provider": "lever",
+                    "code": "content_format_drift",
+                    "recorded_at": "2026-08-08T12:00:00",
+                    "counters": {"raw_candidates": 7, "format_drift": 7, "private": 99},
+                    "url": "https://private.example/jobs/secret",
+                    "search": "private keywords",
+                },
+                {
+                    "provider": "lever",
+                    "code": "content_format_drift",
+                    "recorded_at": "2026-08-07T12:00:00",
+                    "counters": {"raw_candidates": 5, "format_drift": 5},
+                    "raw_error": "credential secret-value",
+                },
+                {
+                    "provider": "ashby",
+                    "code": "partial_results",
+                    "recorded_at": "2026-08-08T12:00:00",
+                    "counters": {"timeouts": 1},
+                },
+                {
+                    "provider": "untrusted",
+                    "code": "provider_error",
+                    "recorded_at": "2026-08-08T12:00:00",
+                    "counters": {"provider_error": 1},
+                },
+            ]
+        }
+
+        report = build_maintainer_report(history, "20260808.22", "2026-08-08")
+        markdown = format_maintainer_report(report)
+        serialized = json.dumps(report)
+
+        self.assertEqual(2, report["reportable_event_count"])
+        self.assertEqual(1, report["repeated_group_count"])
+        self.assertEqual(1, len(report["diagnostic_groups"]))
+        group = report["diagnostic_groups"][0]
+        self.assertEqual(2, group["occurrences"])
+        self.assertEqual("2026-08-07", group["first_seen_on"])
+        self.assertEqual("2026-08-08", group["last_seen_on"])
+        self.assertEqual(7, group["latest_counters"]["format_drift"])
+        self.assertIn("Nothing is submitted automatically", markdown)
+        for private_value in ("private.example", "private keywords", "secret-value", '"private"'):
+            self.assertNotIn(private_value, serialized)
+            self.assertNotIn(private_value, markdown)
+
+    def test_maintainer_report_rejects_unsafe_build_and_dates(self) -> None:
+        report = build_maintainer_report(
+            {"items": [{
+                "provider": "lever",
+                "code": "provider_error",
+                "recorded_at": "not-a-date/private",
+                "counters": {"provider_error": MAX_COUNTER_VALUE + 1},
+            }]},
+            "build with private path C:/Users/example",
+            "not-a-date",
+        )
+        self.assertEqual("unknown", report["application_build"])
+        self.assertEqual("unknown", report["generated_on"])
+        self.assertEqual("unknown", report["diagnostic_groups"][0]["first_seen_on"])
+        self.assertEqual(
+            MAX_COUNTER_VALUE,
+            report["diagnostic_groups"][0]["latest_counters"]["provider_error"],
+        )
+
     def test_api_retrieves_exports_and_clears_safe_history(self) -> None:
         connection = self.connection_factory()
         persist_source_diagnostics(connection, self.search_result(), "2026-08-08T12:00:00")
@@ -3178,6 +3266,7 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
         with patch.object(app_module, "get_db_connection", side_effect=self.connection_factory):
             history_response = app_module.get_source_diagnostic_history()
             export_response = app_module.export_source_diagnostic_history()
+            report_response = app_module.preview_source_diagnostic_maintainer_report()
             cleared = app_module.clear_source_diagnostic_history()
 
         history = json.loads(history_response.body)
@@ -3186,9 +3275,17 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
         self.assertEqual("no-store", history_response.headers["cache-control"])
         self.assertEqual(1, exported["record_count"])
         self.assertIn("attachment;", export_response.headers["content-disposition"])
+        report = json.loads(report_response.body)
+        self.assertTrue(report["can_report"])
+        self.assertEqual("no-store", report_response.headers["cache-control"])
+        self.assertIn("content format drift", report["issue_title"])
+        self.assertIn("CareerTrellis source diagnostic report", report["markdown"])
         exported_text = export_response.body.decode("utf-8")
         self.assertNotIn("private.example", exported_text)
         self.assertNotIn("secret-value", exported_text)
+        report_text = report_response.body.decode("utf-8")
+        self.assertNotIn("private.example", report_text)
+        self.assertNotIn("secret-value", report_text)
         self.assertEqual(1, cleared["cleared"])
 
     def test_history_failure_does_not_replace_successful_search_result(self) -> None:

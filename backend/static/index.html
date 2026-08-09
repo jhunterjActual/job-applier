@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-21">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-22">
 </head>
 <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -874,8 +874,47 @@
                 </button>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" id="close-source-diagnostics-modal-btn">Close</button>
-                    <a class="btn btn-primary" id="export-source-diagnostics-btn" href="/api/source-diagnostics/export" download hidden>
+                    <a class="btn btn-secondary" id="export-source-diagnostics-btn" href="/api/source-diagnostics/export" download hidden>
                         <i class="fa-solid fa-download" aria-hidden="true"></i> Export JSON
+                    </a>
+                    <button type="button" class="btn btn-primary" id="prepare-maintainer-report-btn" disabled>
+                        <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Prepare Maintainer Report
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Explicitly reviewed, privacy-minimized provider report -->
+    <div class="modal" id="maintainer-report-modal" role="dialog" aria-modal="true" aria-labelledby="maintainer-report-title" aria-describedby="maintainer-report-description" aria-hidden="true" inert>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="maintainer-report-title">Review Maintainer Report</h2>
+                <button type="button" class="close-modal-btn" id="close-maintainer-report-modal" aria-label="Close maintainer report"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="backup-security-notice margin-bottom-md">
+                    <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+                    <div>
+                        <strong>Nothing is sent automatically.</strong>
+                        <p id="maintainer-report-description">Review the complete report below. Copying keeps it on your device. Opening the GitHub issue draft sends this displayed text to github.com in the new tab, where you can edit it again before submitting.</p>
+                    </div>
+                </div>
+                <p class="text-muted margin-bottom-md" id="maintainer-report-summary"></p>
+                <div class="form-group">
+                    <label for="maintainer-report-preview">Complete report to be shared</label>
+                    <textarea class="maintainer-report-preview" id="maintainer-report-preview" readonly spellcheck="false"></textarea>
+                </div>
+                <p class="form-help provider-test-status" id="maintainer-report-status" role="status" aria-live="polite"></p>
+            </div>
+            <div class="modal-footer source-diagnostics-footer">
+                <button type="button" class="btn btn-secondary" id="copy-maintainer-report-btn">
+                    <i class="fa-solid fa-copy" aria-hidden="true"></i> Copy Report
+                </button>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="close-maintainer-report-modal-btn">Close</button>
+                    <a class="btn btn-primary" id="open-github-report-btn" target="_blank" rel="noopener noreferrer" hidden>
+                        <i class="fa-brands fa-github" aria-hidden="true"></i> Open GitHub Issue Draft
                     </a>
                 </div>
             </div>
@@ -1264,6 +1303,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-21"></script>
+    <script src="/static/app.js?v=20260808-22"></script>
 </body>
 </html>

@@ -1407,6 +1407,15 @@ select:focus {
     justify-content: space-between;
 }
 
+.maintainer-report-preview {
+    min-height: 320px;
+    max-height: 50vh;
+    resize: vertical;
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
 /* Data Table Component */
 .no-padding {
     padding: 0;
@@ -2471,10 +2480,16 @@ body.modal-open {
         flex-direction: column;
     }
 
-    .provider-alert-actions,
-    .source-diagnostics-footer .modal-actions {
+    .provider-alert-actions {
         display: grid;
         grid-template-columns: 1fr auto;
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .source-diagnostics-footer .modal-actions {
+        display: grid;
+        grid-template-columns: 1fr;
         margin-left: 0;
         width: 100%;
     }

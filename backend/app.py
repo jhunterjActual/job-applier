@@ -76,7 +76,12 @@ from interview_prep import (
     save_interview_prep,
     starter_interview_prep,
 )
-from source_diagnostics import list_source_diagnostics, persist_source_diagnostics
+from source_diagnostics import (
+    build_maintainer_report,
+    format_maintainer_report,
+    list_source_diagnostics,
+    persist_source_diagnostics,
+)
 from materials import cover_letter_output_path, material_download_name, persist_cover_letter, resolve_output_file
 from resume_documents import ResumeDocumentError, build_accessible_resume_docx, import_resume_document
 from base_resumes import (
@@ -112,7 +117,7 @@ from analytics import (
 )
 from observability import initialize_sentry, sentry_debug_enabled
 
-APP_BUILD = "20260808.21"
+APP_BUILD = "20260808.22"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -1446,6 +1451,38 @@ def export_source_diagnostic_history() -> JSONResponse:
             "Cache-Control": "no-store",
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
+    )
+
+
+@app.get("/api/source-diagnostics/maintainer-report")
+def preview_source_diagnostic_maintainer_report() -> JSONResponse:
+    """Prepare a minimized report for explicit review; never transmit it."""
+    conn = get_db_connection()
+    try:
+        history = list_source_diagnostics(conn, 500)
+    finally:
+        conn.close()
+    report = build_maintainer_report(
+        history,
+        application_build=APP_BUILD,
+        generated_on=date.today().isoformat(),
+    )
+    groups = report["diagnostic_groups"]
+    issue_title = "[Source diagnostics] CareerTrellis provider report"
+    if groups:
+        primary = groups[0]
+        issue_title = (
+            f"[Source diagnostics] {primary['provider'].title()} "
+            f"{primary['code'].replace('_', ' ')}"
+        )
+    return JSONResponse(
+        {
+            "can_report": bool(groups),
+            "issue_title": issue_title,
+            "report": report,
+            "markdown": format_maintainer_report(report) if groups else "",
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 
