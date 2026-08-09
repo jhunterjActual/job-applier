@@ -4,7 +4,7 @@ from typing import Any
 
 
 EXPORT_FORMAT = "career-trellis-user-data"
-EXPORT_SCHEMA_VERSION = 1
+EXPORT_SCHEMA_VERSION = 2
 
 
 EXPORT_FIELDS = {
@@ -40,6 +40,10 @@ EXPORT_FIELDS = {
     ),
     "application_status_history": (
         "id", "job_id", "from_status", "to_status", "changed_at", "source", "notes", "undone_at",
+    ),
+    "application_engagements": (
+        "id", "job_id", "engagement_type", "name", "organization", "contact_details",
+        "status", "activity_on", "next_action_on", "notes", "created_at", "updated_at",
     ),
     "job_suppressions": (
         "id", "hostname", "company", "title", "deleted_at", "deletion_source",

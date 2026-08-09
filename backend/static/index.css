@@ -1743,6 +1743,161 @@ select:focus {
     display: none;
 }
 
+.engagement-modal-content {
+    width: min(96vw, 1180px);
+    max-width: 1180px;
+    height: min(92vh, 940px);
+}
+
+.engagement-layout {
+    display: grid;
+    grid-template-columns: minmax(380px, 0.9fr) minmax(360px, 1.1fr);
+    gap: 20px;
+    align-items: start;
+}
+
+.engagement-form,
+.engagement-records {
+    min-width: 0;
+    padding: 18px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: rgba(2, 8, 23, 0.32);
+}
+
+.engagement-form-heading,
+.engagement-records-heading,
+.engagement-form-actions,
+.engagement-card-header,
+.engagement-card-actions {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.engagement-form-heading {
+    margin-bottom: 16px;
+}
+
+.engagement-form-heading .btn[hidden] {
+    display: none;
+}
+
+.engagement-form-heading h3,
+.engagement-records-heading h3,
+.engagement-card h4 {
+    margin: 0;
+}
+
+.engagement-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.engagement-form-actions {
+    align-items: center;
+    margin-top: 16px;
+}
+
+.engagement-form-actions .form-help {
+    margin: 0;
+}
+
+.engagement-list {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.engagement-card {
+    padding: 15px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: rgba(var(--color-primary-rgb), 0.035);
+}
+
+.engagement-card-header h4 {
+    color: var(--text-primary);
+    font-size: 15px;
+}
+
+.engagement-card-header p {
+    margin: 4px 0 0;
+    font-size: 12px;
+}
+
+.engagement-badges {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.engagement-type-badge,
+.engagement-status-badge {
+    padding: 4px 8px;
+    border-radius: var(--radius-full);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.engagement-type-badge {
+    background: rgba(var(--color-primary-rgb), 0.14);
+    color: var(--color-primary);
+}
+
+.engagement-status-badge {
+    background: rgba(148, 163, 184, 0.14);
+    color: var(--text-secondary);
+}
+
+.engagement-status-badge.status-scheduled,
+.engagement-status-badge.status-contacted {
+    background: rgba(59, 130, 246, 0.14);
+    color: #7db7ff;
+}
+
+.engagement-status-badge.status-completed {
+    background: rgba(34, 197, 94, 0.14);
+    color: #6ee7a0;
+}
+
+.engagement-details {
+    display: grid;
+    gap: 7px;
+    margin-top: 12px;
+}
+
+.engagement-detail {
+    display: grid;
+    grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
+    gap: 10px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.engagement-detail-label {
+    color: var(--text-muted);
+    font-weight: 700;
+}
+
+.engagement-notes {
+    margin: 12px 0 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+.engagement-card-actions {
+    justify-content: flex-end;
+    margin-top: 14px;
+}
+
 .cleanup-footer {
     display: grid;
     grid-template-columns: minmax(190px, auto) minmax(0, 1fr);
@@ -1966,6 +2121,15 @@ select:focus {
 }
 
 @media (max-width: 900px) {
+    .engagement-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .engagement-modal-content {
+        width: calc(100% - 32px);
+        height: 92vh;
+    }
+
     #cleanup-modal .modal-content {
         width: calc(100% - 32px);
         max-height: 92vh;
@@ -1987,6 +2151,40 @@ select:focus {
 }
 
 @media (max-width: 620px) {
+    .engagement-modal-content {
+        width: calc(100% - 20px);
+        height: 94vh;
+        max-height: 94vh;
+    }
+
+    .engagement-form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .engagement-form-grid .full-width {
+        grid-column: span 1;
+    }
+
+    .engagement-form-actions,
+    .engagement-card-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .engagement-form-actions .btn,
+    .engagement-modal-content .modal-footer .btn {
+        width: 100%;
+    }
+
+    .engagement-badges {
+        justify-content: flex-start;
+    }
+
+    .engagement-detail {
+        grid-template-columns: 1fr;
+        gap: 2px;
+    }
+
     .interview-prep-modal-content {
         width: calc(100% - 20px);
         height: 94vh;

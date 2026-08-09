@@ -60,6 +60,10 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Provides a useful local starter without an AI call. An explicit **Generate with AI** action can replace it with a grounded draft using the selected provider and saved job/application context, with a Stop action before the generated draft is committed.
    - Saves reviewed notes locally and supports safely named text downloads and print-friendly output.
 
+11. **People & Application-Step Tracking**:
+   - Tracks recruiters, hiring managers, referrals, networking contacts, and assessments beside each saved application without requiring email or calendar access.
+   - Records status, contact or reference details, activity and next-action dates, and notes. Records stay local, appear in the human-readable data export, and are preserved by encrypted full backups.
+
 ---
 
 ## 🛠️ Architecture
@@ -173,6 +177,7 @@ Permanent deletion also creates a privacy-minimized local suppression record so 
 
 - Use **Mark Applied** on a matched or tailored job to record a manually completed application with its date, method, notes, and follow-up date.
 - Use **Update Status** to record interviews, offers, rejections, withdrawals, or closed roles. **Undo Last Change** restores the previous recorded state.
+- From **Application Logs**, open **People & Steps** to record recruiters, hiring managers, referrals, networking contacts, assessments, and their next actions. These records are deliberately manual and local; CareerTrellis does not contact anyone or access email on your behalf.
 - Save frequently used keyword/location combinations above the search form. Use the score, status, and sort controls to focus the active list.
 - Saved searches can optionally provide daily or weekly local reminders while the app is running; rerunning the saved search advances its next reminder.
 - Use the circular-arrow action on a job row to recheck whether the employer posting remains available.
