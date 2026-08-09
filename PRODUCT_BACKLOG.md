@@ -68,7 +68,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [x] Persist a privacy-safe local history of the important diagnostic elements that triggered each **Some job sources may need attention** notice—including timestamp, provider, diagnostic code, and bounded aggregate counters—and provide retrieval or export for troubleshooting without storing job URLs, descriptions, searches, resumes, or credentials.
 - [x] Make the **Some job sources may need attention** and **Search notes** box dismissible for the current view while keeping the underlying diagnostic history available for later retrieval.
 - [x] Bound remote search response bytes, per-provider candidate counts, and retained job-description sizes; add explicit network timeouts and clear partial-result diagnostics when a source exceeds a budget.
-- [ ] Add an optional privacy-safe Sentry integration and operator setup guide. Keep local variables, request bodies, profile/resume content, job details, URLs, API keys, and generated materials out of events; document read-only Codex inspection credentials separately from the application DSN.
+- [x] Add an optional privacy-safe Sentry integration and operator setup guide. Keep local variables, request bodies, profile/resume content, job details, URLs, API keys, and generated materials out of events; document read-only Codex inspection credentials separately from the application DSN.
 - [x] Replace broad mutable dependency ranges with a reproducible, reviewed lock or constraints file and an intentional dependency-update workflow.
 - [x] Add recruiter, hiring-manager, referral, assessment, and networking tracking.
 - [x] Add PDF metadata, accessible document semantics, clickable contact links, and recruiter-friendly filenames.
