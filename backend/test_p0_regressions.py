@@ -1315,6 +1315,7 @@ class DependencyLockTests(unittest.TestCase):
         self.assertIn("dependency-tools.txt", workflow)
         self.assertIn(".dependency-tools-venv", workflow)
         self.assertIn("--require-hashes", workflow)
+        self.assertIn("python -m playwright install chromium", workflow)
         self.assertIn("test_p0_regressions.py", workflow)
         self.assertIn("test_analytics.py", workflow)
 
