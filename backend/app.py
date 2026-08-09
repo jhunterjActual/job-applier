@@ -112,7 +112,7 @@ from analytics import (
 )
 from observability import initialize_sentry, sentry_debug_enabled
 
-APP_BUILD = "20260808.20"
+APP_BUILD = "20260808.21"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}

@@ -64,6 +64,10 @@ The application features a **FastAPI backend** that doubles as a static file ser
    - Tracks recruiters, hiring managers, referrals, networking contacts, and assessments beside each saved application without requiring email or calendar access.
    - Records status, contact or reference details, activity and next-action dates, and notes. Records stay local, appear in the human-readable data export, and are preserved by encrypted full backups.
 
+12. **Accessible, Responsive Workspace**:
+   - Supports skip navigation, keyboard-operated workspace and material tabs, visible focus, focus-trapped dialogs with opener restoration, screen-reader status announcements, labeled tables, and reduced-motion preferences.
+   - Reflows the fixed desktop navigation, forms, filters, action groups, and dialogs for narrow screens and high zoom. Wide result tables remain keyboard-focusable horizontal regions so their columns are not silently removed.
+
 ---
 
 ## 🛠️ Architecture
