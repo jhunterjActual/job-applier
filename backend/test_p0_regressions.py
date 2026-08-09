@@ -952,12 +952,13 @@ class FrontendStartupTests(unittest.TestCase):
             "full-backup-password", "full-backup-confirm-password",
             "open-full-restore-btn", "full-restore-modal", "full-restore-form",
             "full-restore-file", "full-restore-password", "full-restore-confirm-replace",
+            "main-content", "app-announcer", "job-results-status", "application-results-status",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-19", html_source)
-        self.assertIn("index.css?v=20260808-19", html_source)
+        self.assertIn("app.js?v=20260808-21", html_source)
+        self.assertIn("index.css?v=20260808-21", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -965,7 +966,58 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.20", source)
+                self.assertIn("20260808.21", source)
+
+    def test_workspace_accessibility_and_mobile_reflow_contract(self) -> None:
+        static_dir = Path(__file__).parent / "static"
+        html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+        script_source = (static_dir / "app.js").read_text(encoding="utf-8")
+        css_source = (static_dir / "index.css").read_text(encoding="utf-8")
+
+        self.assertIn('class="skip-link" href="#main-content"', html_source)
+        self.assertIn('class="nav-menu" role="tablist"', html_source)
+        self.assertEqual(4, len(re.findall(r'class="nav-btn(?: active)?"[^>]+role="tab"', html_source)))
+        self.assertEqual(4, len(re.findall(r'class="tab-pane(?: active)?"[^>]+role="tabpanel"', html_source)))
+        self.assertGreaterEqual(html_source.count('<caption class="sr-only">'), 3)
+        self.assertGreaterEqual(html_source.count('scope="col"'), 20)
+        self.assertGreaterEqual(html_source.count('class="table-responsive'), 3)
+
+        modal_ids = (
+            "full-backup-modal", "full-restore-modal", "job-import-modal",
+            "source-diagnostics-modal", "cleanup-modal", "tailor-modal",
+            "lifecycle-modal", "interview-prep-modal", "engagement-modal",
+            "base-resume-history-modal", "loading-modal",
+        )
+        for modal_id in modal_ids:
+            with self.subTest(modal_id=modal_id):
+                match = re.search(rf'<div class="modal[^"]*" id="{modal_id}"([^>]*)>', html_source)
+                self.assertIsNotNone(match)
+                attributes = match.group(1)
+                self.assertIn('role="dialog"', attributes)
+                self.assertIn('aria-modal="true"', attributes)
+                self.assertIn('aria-labelledby=', attributes)
+                self.assertIn('aria-hidden="true"', attributes)
+                self.assertIn('inert', attributes)
+
+        for contract in (
+            "function setupAccessibility", "function openAccessibleModal",
+            "function closeAccessibleModal", "function handleModalKeydown",
+            'event.key === "Escape"', 'event.key !== "Tab"',
+            'setAttribute("aria-selected"', 'pane.inert = true',
+            "modalStack", "returnFocus", "prefers-reduced-motion",
+        ):
+            with self.subTest(script_contract=contract):
+                self.assertIn(contract, script_source)
+        self.assertIsNone(re.search(r"\w+Modal\.classList\.(?:add|remove)\(\"active\"\)", script_source))
+
+        for contract in (
+            ".skip-link", ":focus-visible", ".sr-only",
+            "@media (max-width: 900px)", "@media (max-width: 620px)",
+            "@media (prefers-reduced-motion: reduce)", "height: 100dvh",
+            ".table-responsive:focus-visible", "body.modal-open",
+        ):
+            with self.subTest(css_contract=contract):
+                self.assertIn(contract, css_source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -1728,7 +1780,7 @@ class UserDataExportTests(unittest.TestCase):
 
 class EncryptedFullBackupTests(unittest.TestCase):
     PASSWORD = "correct horse battery staple"
-    BUILD = "20260808.20"
+    BUILD = "20260808.21"
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()

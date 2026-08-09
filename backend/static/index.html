@@ -19,46 +19,48 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-19">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-21">
 </head>
 <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <div class="sr-only" id="app-announcer" role="status" aria-live="polite" aria-atomic="true"></div>
     <div class="app-container">
         <!-- Sidebar Navigation -->
-        <aside class="sidebar">
+        <aside class="sidebar" aria-label="CareerTrellis workspace">
             <div class="logo-area">
                 <div class="logo-icon"><img src="/static/icons/favicon.svg" alt=""></div>
                 <div class="logo-text">Career<span>Trellis</span></div>
             </div>
             
-            <nav class="nav-menu">
-                <button class="nav-btn active" data-tab="dashboard">
-                    <i class="fa-solid fa-chart-line"></i>
+            <nav class="nav-menu" role="tablist" aria-label="Workspace sections" aria-orientation="vertical">
+                <button type="button" class="nav-btn active" id="nav-dashboard" data-tab="dashboard" role="tab" aria-selected="true" aria-controls="tab-dashboard" tabindex="0">
+                    <i class="fa-solid fa-chart-line" aria-hidden="true"></i>
                     <span>Dashboard</span>
                 </button>
-                <button class="nav-btn" data-tab="profile">
-                    <i class="fa-solid fa-user-tie"></i>
+                <button type="button" class="nav-btn" id="nav-profile" data-tab="profile" role="tab" aria-selected="false" aria-controls="tab-profile" tabindex="-1">
+                    <i class="fa-solid fa-user-tie" aria-hidden="true"></i>
                     <span>Profile & Resume</span>
                 </button>
-                <button class="nav-btn" data-tab="search">
-                    <i class="fa-solid fa-magnifying-glass"></i>
+                <button type="button" class="nav-btn" id="nav-search" data-tab="search" role="tab" aria-selected="false" aria-controls="tab-search" tabindex="-1">
+                    <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
                     <span>Search & Match</span>
                 </button>
-                <button class="nav-btn" data-tab="logs">
-                    <i class="fa-solid fa-clipboard-list"></i>
+                <button type="button" class="nav-btn" id="nav-logs" data-tab="logs" role="tab" aria-selected="false" aria-controls="tab-logs" tabindex="-1">
+                    <i class="fa-solid fa-clipboard-list" aria-hidden="true"></i>
                     <span>Application Logs</span>
                 </button>
             </nav>
 
             <div class="api-key-badge-container">
-                <div class="api-key-badge" id="api-status">
-                    <span class="status-indicator yellow"></span>
+                <div class="api-key-badge" id="api-status" role="status" aria-live="polite" aria-atomic="true">
+                    <span class="status-indicator yellow" aria-hidden="true"></span>
                     <span class="status-text">Checking AI Provider...</span>
                 </div>
             </div>
         </aside>
 
         <!-- Main Content Area -->
-        <main class="main-content">
+        <main class="main-content" id="main-content" tabindex="-1">
             <!-- Top Header -->
             <header class="top-header">
                 <div class="header-title">
@@ -72,7 +74,7 @@
             </header>
 
             <!-- Dashboard Tab -->
-            <section class="tab-pane active" id="tab-dashboard">
+            <section class="tab-pane active" id="tab-dashboard" role="tabpanel" aria-labelledby="nav-dashboard">
                 <div class="stats-grid">
                     <div class="stat-card">
                         <div class="stat-icon blue"><i class="fa-solid fa-search"></i></div>
@@ -143,17 +145,18 @@
                             <span class="insight-label">Response rate</span>
                         </div>
                     </div>
-                    <div class="table-responsive insights-table-wrap">
+                    <div class="table-responsive insights-table-wrap" role="region" aria-label="Application effectiveness results" tabindex="0">
                         <table class="data-table" id="application-insights-table">
+                            <caption class="sr-only">Application outcomes grouped by the selected category</caption>
                             <thead>
                                 <tr>
-                                    <th id="application-insights-group-heading">Job source</th>
-                                    <th>Applications</th>
-                                    <th>Responses</th>
-                                    <th>Interviews</th>
-                                    <th>Offers</th>
-                                    <th>Rejections</th>
-                                    <th>Response rate</th>
+                                    <th scope="col" id="application-insights-group-heading">Job source</th>
+                                    <th scope="col">Applications</th>
+                                    <th scope="col">Responses</th>
+                                    <th scope="col">Interviews</th>
+                                    <th scope="col">Offers</th>
+                                    <th scope="col">Rejections</th>
+                                    <th scope="col">Response rate</th>
                                 </tr>
                             </thead>
                             <tbody id="application-insights-body">
@@ -191,7 +194,7 @@
             </section>
 
             <!-- Profile & Resume Tab -->
-            <section class="tab-pane" id="tab-profile">
+            <section class="tab-pane" id="tab-profile" role="tabpanel" aria-labelledby="nav-profile" aria-hidden="true" inert>
                 <div class="settings-grid">
                     <!-- Left: Contact Details -->
                     <div class="card">
@@ -436,7 +439,7 @@
             </section>
 
             <!-- Search & Match Tab -->
-            <section class="tab-pane" id="tab-search">
+            <section class="tab-pane" id="tab-search" role="tabpanel" aria-labelledby="nav-search" aria-hidden="true" inert>
                 <!-- Search Inputs Card -->
                 <div class="card margin-bottom-md">
                     <div class="card-body">
@@ -620,17 +623,18 @@
                         </details>
                     </div>
                     <div class="card-body no-padding">
-                        <div class="table-responsive">
+                        <div class="table-responsive" role="region" aria-label="Discovered job postings" tabindex="0">
                             <table class="data-table" id="jobs-table">
+                                <caption class="sr-only">Discovered job postings and available actions</caption>
                                 <thead>
                                     <tr>
-                                        <th>Company</th>
-                                        <th>Position</th>
-                                        <th>Details</th>
-                                        <th>Match Score</th>
-                                        <th>Link</th>
-                                        <th>Status</th>
-                                        <th class="actions-col">Actions</th>
+                                        <th scope="col">Company</th>
+                                        <th scope="col">Position</th>
+                                        <th scope="col">Details</th>
+                                        <th scope="col">Match Score</th>
+                                        <th scope="col">Link</th>
+                                        <th scope="col">Status</th>
+                                        <th scope="col" class="actions-col">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -643,12 +647,13 @@
                                 </tbody>
                             </table>
                         </div>
+                        <p class="sr-only" id="job-results-status" role="status" aria-live="polite" aria-atomic="true"></p>
                     </div>
                 </div>
             </section>
 
             <!-- Application Logs Tab -->
-            <section class="tab-pane" id="tab-logs">
+            <section class="tab-pane" id="tab-logs" role="tabpanel" aria-labelledby="nav-logs" aria-hidden="true" inert>
                 <div class="card">
                     <div class="card-header justify-between">
                         <h2>Application Materials &amp; History</h2>
@@ -657,17 +662,18 @@
                         </button>
                     </div>
                     <div class="card-body no-padding">
-                        <div class="table-responsive">
+                        <div class="table-responsive" role="region" aria-label="Application history" tabindex="0">
                             <table class="data-table" id="logs-table">
+                                <caption class="sr-only">Application history, materials, and preparation actions</caption>
                                 <thead>
                                     <tr>
-                                        <th>Company</th>
-                                        <th>Position Title</th>
-                                        <th>Application Date</th>
-                                        <th>Headquarters Address</th>
-                                        <th>Status</th>
-                                        <th>Files</th>
-                                        <th>Preparation &amp; Contacts</th>
+                                        <th scope="col">Company</th>
+                                        <th scope="col">Position Title</th>
+                                        <th scope="col">Application Date</th>
+                                        <th scope="col">Headquarters Address</th>
+                                        <th scope="col">Status</th>
+                                        <th scope="col">Files</th>
+                                        <th scope="col">Preparation &amp; Contacts</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -680,6 +686,7 @@
                                 </tbody>
                             </table>
                         </div>
+                        <p class="sr-only" id="application-results-status" role="status" aria-live="polite" aria-atomic="true"></p>
                     </div>
                 </div>
             </section>
@@ -687,7 +694,7 @@
     </div>
 
     <!-- Password-encrypted full backup -->
-    <div class="modal" id="full-backup-modal" role="dialog" aria-modal="true" aria-labelledby="full-backup-title">
+    <div class="modal" id="full-backup-modal" role="dialog" aria-modal="true" aria-labelledby="full-backup-title" aria-hidden="true" inert>
         <div class="modal-content modal-narrow-content">
             <div class="modal-header">
                 <div>
@@ -728,7 +735,7 @@
     </div>
 
     <!-- Guarded full restore -->
-    <div class="modal" id="full-restore-modal" role="dialog" aria-modal="true" aria-labelledby="full-restore-title">
+    <div class="modal" id="full-restore-modal" role="dialog" aria-modal="true" aria-labelledby="full-restore-title" aria-hidden="true" inert>
         <div class="modal-content modal-narrow-content">
             <div class="modal-header">
                 <div>
@@ -772,11 +779,11 @@
     </div>
 
     <!-- Manual job import -->
-    <div class="modal" id="job-import-modal">
+    <div class="modal" id="job-import-modal" role="dialog" aria-modal="true" aria-labelledby="job-import-title" aria-hidden="true" inert>
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Add Job Posting by URL</h2>
-                <button type="button" class="close-modal-btn" id="close-job-import-modal" aria-label="Close job import"><i class="fa-solid fa-xmark"></i></button>
+                <h2 id="job-import-title">Add Job Posting by URL</h2>
+                <button type="button" class="close-modal-btn" id="close-job-import-modal" aria-label="Close job import"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
             </div>
             <form id="job-import-form">
                 <div class="modal-body">
@@ -787,10 +794,10 @@
                             <input type="url" id="job-import-url" maxlength="2048" required placeholder="https://employer.example/jobs/role-id">
                         </div>
                         <button type="button" class="btn btn-secondary" id="preview-job-import-btn">
-                            <i class="fa-solid fa-wand-magic-sparkles"></i> Preview Details
+                            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Preview Details
                         </button>
                     </div>
-                    <div class="provider-alerts margin-top-sm" id="job-import-message" hidden></div>
+                    <div class="provider-alerts margin-top-sm" id="job-import-message" role="status" aria-live="polite" aria-atomic="true" hidden></div>
                     <div id="job-import-fields" class="form-grid margin-top-sm" hidden>
                         <div class="form-group">
                             <label for="job-import-company">Company</label>
@@ -848,7 +855,7 @@
     </div>
 
     <!-- Source Diagnostic History -->
-    <div class="modal" id="source-diagnostics-modal" role="dialog" aria-modal="true" aria-labelledby="source-diagnostics-title">
+    <div class="modal" id="source-diagnostics-modal" role="dialog" aria-modal="true" aria-labelledby="source-diagnostics-title" aria-hidden="true" inert>
         <div class="modal-content">
             <div class="modal-header">
                 <h2 id="source-diagnostics-title">Source Diagnostic History</h2>
@@ -876,11 +883,11 @@
     </div>
 
     <!-- Untouched Jobs Cleanup Preview -->
-    <div class="modal" id="cleanup-modal">
+    <div class="modal" id="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="cleanup-title" aria-describedby="cleanup-definition" aria-hidden="true" inert>
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Preview Untouched Job Cleanup</h2>
-                <button type="button" class="close-modal-btn" id="close-cleanup-modal" aria-label="Close cleanup preview"><i class="fa-solid fa-xmark"></i></button>
+                <h2 id="cleanup-title">Preview Untouched Job Cleanup</h2>
+                <button type="button" class="close-modal-btn" id="close-cleanup-modal" aria-label="Close cleanup preview"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
             </div>
             <div class="modal-body">
                 <p class="text-muted margin-bottom-md" id="cleanup-definition">
@@ -944,11 +951,11 @@
 
     <!-- Modals -->
     <!-- Tailoring Modal -->
-    <div class="modal" id="tailor-modal">
+    <div class="modal" id="tailor-modal" role="dialog" aria-modal="true" aria-labelledby="tailor-title" aria-hidden="true" inert>
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Review Tailored Application Materials</h2>
-                <button class="close-modal-btn" id="close-tailor-modal"><i class="fa-solid fa-xmark"></i></button>
+                <h2 id="tailor-title">Review Tailored Application Materials</h2>
+                <button type="button" class="close-modal-btn" id="close-tailor-modal" aria-label="Close application materials"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
             </div>
             <div class="modal-body">
                 <div class="manual-application-guide">
@@ -970,17 +977,17 @@
                         </a>
                     </div>
                 </div>
-                <div class="modal-tabs">
-                    <button class="modal-tab-btn active" data-modal-tab="tailored-resume">Tailored Resume</button>
-                    <button class="modal-tab-btn" data-modal-tab="cover-letter">Cover Letter</button>
+                <div class="modal-tabs" role="tablist" aria-label="Application materials">
+                    <button type="button" class="modal-tab-btn active" id="materials-tab-tailored-resume" data-modal-tab="tailored-resume" role="tab" aria-selected="true" aria-controls="modal-tab-tailored-resume" tabindex="0">Tailored Resume</button>
+                    <button type="button" class="modal-tab-btn" id="materials-tab-cover-letter" data-modal-tab="cover-letter" role="tab" aria-selected="false" aria-controls="modal-tab-cover-letter" tabindex="-1">Cover Letter</button>
                 </div>
                 
-                <div class="modal-tab-content active" id="modal-tab-tailored-resume">
+                <div class="modal-tab-content active" id="modal-tab-tailored-resume" role="tabpanel" aria-labelledby="materials-tab-tailored-resume">
                     <div class="material-container">
                         <textarea id="tailored-resume-display" class="materials-textarea"></textarea>
                     </div>
                 </div>
-                <div class="modal-tab-content" id="modal-tab-cover-letter">
+                <div class="modal-tab-content" id="modal-tab-cover-letter" role="tabpanel" aria-labelledby="materials-tab-cover-letter" aria-hidden="true" inert>
                     <div class="material-container">
                         <textarea id="cover-letter-display" class="materials-textarea"></textarea>
                     </div>
@@ -988,8 +995,8 @@
             </div>
             <div class="modal-footer">
                 <div class="modal-actions">
-                    <button class="btn btn-secondary" id="close-tailor-modal-btn">Cancel</button>
-                    <button class="btn btn-secondary" id="save-materials-btn">
+                    <button type="button" class="btn btn-secondary" id="close-tailor-modal-btn">Cancel</button>
+                    <button type="button" class="btn btn-secondary" id="save-materials-btn">
                         <i class="fa-solid fa-floppy-disk"></i> Save Edits
                     </button>
                     <a class="btn btn-primary" id="open-manual-application-btn" target="_blank" rel="noopener noreferrer">
@@ -1001,11 +1008,11 @@
     </div>
 
     <!-- Manual application and pipeline editor -->
-    <div class="modal" id="lifecycle-modal">
+    <div class="modal" id="lifecycle-modal" role="dialog" aria-modal="true" aria-labelledby="lifecycle-modal-title" aria-describedby="lifecycle-job-label" aria-hidden="true" inert>
         <div class="modal-content">
             <div class="modal-header">
                 <h2 id="lifecycle-modal-title">Update Application Status</h2>
-                <button class="close-modal-btn" id="close-lifecycle-modal" aria-label="Close status editor"><i class="fa-solid fa-xmark"></i></button>
+                <button type="button" class="close-modal-btn" id="close-lifecycle-modal" aria-label="Close status editor"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
             </div>
             <form id="lifecycle-form">
                 <div class="modal-body">
@@ -1075,7 +1082,7 @@
     </div>
 
     <!-- Editable interview preparation workspace -->
-    <div class="modal" id="interview-prep-modal" role="dialog" aria-modal="true" aria-labelledby="interview-prep-title">
+    <div class="modal" id="interview-prep-modal" role="dialog" aria-modal="true" aria-labelledby="interview-prep-title" aria-hidden="true" inert>
         <div class="modal-content interview-prep-modal-content">
             <div class="modal-header">
                 <div>
@@ -1117,7 +1124,7 @@
     </div>
 
     <!-- Local relationship and assessment tracker -->
-    <div class="modal" id="engagement-modal" role="dialog" aria-modal="true" aria-labelledby="engagement-title">
+    <div class="modal" id="engagement-modal" role="dialog" aria-modal="true" aria-labelledby="engagement-title" aria-hidden="true" inert>
         <div class="modal-content engagement-modal-content">
             <div class="modal-header">
                 <div>
@@ -1207,7 +1214,7 @@
     </div>
 
     <!-- Base Resume History Modal -->
-    <div class="modal" id="base-resume-history-modal" role="dialog" aria-modal="true" aria-labelledby="base-resume-history-title">
+    <div class="modal" id="base-resume-history-modal" role="dialog" aria-modal="true" aria-labelledby="base-resume-history-title" aria-hidden="true" inert>
         <div class="modal-content">
             <div class="modal-header">
                 <div>
@@ -1241,22 +1248,22 @@
     </section>
 
     <!-- Loading / Applying Modal -->
-    <div class="modal modal-sm" id="loading-modal" role="dialog" aria-modal="true" aria-labelledby="loading-title" aria-describedby="loading-subtitle">
+    <div class="modal modal-sm" id="loading-modal" role="dialog" aria-modal="true" aria-labelledby="loading-title" aria-describedby="loading-subtitle" aria-hidden="true" inert>
         <div class="modal-content text-center">
             <div class="spinner-container">
-                <div class="dual-ring-spinner"></div>
+                <div class="dual-ring-spinner" aria-hidden="true"></div>
             </div>
-            <h3 id="loading-title">Processing Request...</h3>
+            <h3 id="loading-title" tabindex="-1">Processing Request...</h3>
             <p id="loading-subtitle" class="text-muted">Please wait while CareerTrellis prepares your request.</p>
             <div class="loading-actions" id="loading-actions" hidden>
                 <button type="button" class="btn btn-secondary" id="stop-loading-btn">
-                    <i class="fa-solid fa-stop"></i> Stop
+                    <i class="fa-solid fa-stop" aria-hidden="true"></i> Stop
                 </button>
             </div>
         </div>
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-19"></script>
+    <script src="/static/app.js?v=20260808-21"></script>
 </body>
 </html>

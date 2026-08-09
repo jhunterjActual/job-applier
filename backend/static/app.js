@@ -16,7 +16,6 @@ let aiProviderSettingsSaved = false;
 let mapsProviderSettingsSaved = false;
 let loadedJobs = [];
 let jobImportCanonicalUrl = null;
-let sourceDiagnosticsOpener = null;
 let activeLoadingOperation = null;
 let baseResumes = [];
 let currentBaseResumeId = null;
@@ -29,6 +28,8 @@ let interviewPrepCompany = "";
 let interviewPrepPosition = "";
 let engagementJobId = null;
 let engagementRecords = [];
+const modalStack = [];
+const modalDismissHandlers = new Map();
 
 // DOM Elements
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -37,6 +38,9 @@ const pageTitle = document.getElementById("page-title");
 const pageSubtitle = document.getElementById("page-subtitle");
 const userDisplayName = document.getElementById("user-display-name");
 const apiStatusBadge = document.getElementById("api-status");
+const appContainer = document.querySelector(".app-container");
+const appAnnouncer = document.getElementById("app-announcer");
+const navMenu = document.querySelector(".nav-menu");
 
 // Profile Form Elements
 const profileForm = document.getElementById("profile-form");
@@ -170,6 +174,8 @@ const jobImportDescription = document.getElementById("job-import-description");
 // Logs Elements
 const refreshLogsBtn = document.getElementById("refresh-logs-btn");
 const logsTableBody = document.querySelector("#logs-table tbody");
+const jobResultsStatus = document.getElementById("job-results-status");
+const applicationResultsStatus = document.getElementById("application-results-status");
 
 // Dashboard insight elements
 const applicationInsightsDimension = document.getElementById("application-insights-dimension");
@@ -290,6 +296,8 @@ const fullRestoreConfirmReplace = document.getElementById("full-restore-confirm-
 
 // Initialize on Load
 document.addEventListener("DOMContentLoaded", () => {
+    setupAccessibility();
+    setupAccessibleModals();
     setupTabSwitching();
     setupPasswordToggle();
 
@@ -384,26 +392,6 @@ document.addEventListener("DOMContentLoaded", () => {
     loadLogs();
     loadApplicationInsights();
     refreshSourceDiagnosticCount();
-    document.addEventListener("keydown", event => {
-        if (event.key === "Escape" && sourceDiagnosticsModal.classList.contains("active")) {
-            hideSourceDiagnostics();
-        }
-        if (event.key === "Escape" && baseResumeHistoryModal.classList.contains("active")) {
-            hideBaseResumeHistory();
-        }
-        if (event.key === "Escape" && interviewPrepModal.classList.contains("active")) {
-            requestCloseInterviewPrep();
-        }
-        if (event.key === "Escape" && engagementModal.classList.contains("active")) {
-            hideEngagementTracker();
-        }
-        if (event.key === "Escape" && fullBackupModal.classList.contains("active")) {
-            hideFullBackupModal();
-        }
-        if (event.key === "Escape" && fullRestoreModal.classList.contains("active")) {
-            hideFullRestoreModal();
-        }
-    });
 });
 
 function bindEvent(element, eventName, handler) {
@@ -414,17 +402,167 @@ function createElement(tag, className = "", textContent = null) {
     const element = document.createElement(tag);
     if (className) element.className = className;
     if (textContent !== null) element.textContent = textContent;
+    if (tag === "i" && className.includes("fa-")) element.setAttribute("aria-hidden", "true");
     return element;
 }
 
 function createActionButton(label, iconClass, className, handler, title = "") {
     const button = createElement("button", className);
     button.type = "button";
-    if (title) button.title = title;
+    if (title) {
+        button.title = title;
+        button.setAttribute("aria-label", title);
+    }
     button.appendChild(createElement("i", iconClass));
     if (label) button.appendChild(document.createTextNode(` ${label}`));
     button.addEventListener("click", handler);
     return button;
+}
+
+function renderEmptyTableState(tableBody, columnCount, iconClass, message) {
+    const row = createElement("tr");
+    const cell = createElement("td", "table-empty-state");
+    cell.colSpan = columnCount;
+    cell.append(createElement("i", iconClass), createElement("p", "", message));
+    row.appendChild(cell);
+    tableBody.replaceChildren(row);
+}
+
+const MODAL_FOCUS_SELECTOR = [
+    "a[href]", "button:not([disabled])", "input:not([disabled]):not([type='hidden'])",
+    "select:not([disabled])", "textarea:not([disabled])", "summary",
+    "[tabindex]:not([tabindex='-1'])"
+].join(",");
+
+function announce(message) {
+    if (!appAnnouncer) return;
+    appAnnouncer.textContent = "";
+    window.setTimeout(() => {
+        appAnnouncer.textContent = message;
+    }, 0);
+}
+
+function updateNavigationOrientation() {
+    if (!navMenu) return;
+    navMenu.setAttribute(
+        "aria-orientation",
+        window.matchMedia("(max-width: 900px)").matches ? "horizontal" : "vertical"
+    );
+}
+
+function setupAccessibility() {
+    document.querySelectorAll("i[class*='fa-']").forEach(icon => icon.setAttribute("aria-hidden", "true"));
+    updateNavigationOrientation();
+    window.addEventListener("resize", updateNavigationOrientation);
+}
+
+function modalFocusableElements(modal) {
+    return Array.from(modal.querySelectorAll(MODAL_FOCUS_SELECTOR)).filter(element => (
+        !element.closest("[inert]") && element.getClientRects().length > 0
+    ));
+}
+
+function openAccessibleModal(modal, initialFocus = null) {
+    if (!modal || modalStack.some(entry => entry.modal === modal)) return;
+    const previous = modalStack.at(-1)?.modal;
+    if (previous) {
+        previous.inert = true;
+        previous.setAttribute("aria-hidden", "true");
+    }
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    modalStack.push({ modal, returnFocus: activeElement });
+    if (appContainer) appContainer.inert = true;
+    document.body.classList.add("modal-open");
+    modal.classList.add("active");
+    modal.inert = false;
+    modal.setAttribute("aria-hidden", "false");
+    window.setTimeout(() => {
+        const requested = typeof initialFocus === "function" ? initialFocus() : initialFocus;
+        const target = requested || modalFocusableElements(modal)[0] || modal;
+        target.focus({ preventScroll: true });
+    }, 0);
+}
+
+function closeAccessibleModal(modal, restoreFocus = true) {
+    if (!modal) return;
+    const index = modalStack.findIndex(entry => entry.modal === modal);
+    const record = index >= 0 ? modalStack[index] : null;
+    const wasTop = index === modalStack.length - 1;
+    modal.classList.remove("active");
+    modal.inert = true;
+    modal.setAttribute("aria-hidden", "true");
+    if (index >= 0) modalStack.splice(index, 1);
+    if (!wasTop) return;
+
+    const previous = modalStack.at(-1)?.modal;
+    if (previous) {
+        previous.inert = false;
+        previous.setAttribute("aria-hidden", "false");
+    } else {
+        if (appContainer) appContainer.inert = false;
+        document.body.classList.remove("modal-open");
+    }
+    if (restoreFocus) {
+        window.setTimeout(() => {
+            if (record?.returnFocus?.isConnected && !record.returnFocus.closest("[inert]")) {
+                record.returnFocus.focus({ preventScroll: true });
+            } else if (previous) {
+                (modalFocusableElements(previous)[0] || previous).focus({ preventScroll: true });
+            }
+        }, 0);
+    }
+}
+
+function handleModalKeydown(event) {
+    const modal = modalStack.at(-1)?.modal;
+    if (!modal) return;
+    if (event.key === "Escape") {
+        const dismiss = modalDismissHandlers.get(modal);
+        if (dismiss) {
+            event.preventDefault();
+            dismiss();
+        }
+        return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = modalFocusableElements(modal);
+    if (!focusable.length) {
+        event.preventDefault();
+        modal.focus();
+        return;
+    }
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && (document.activeElement === first || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+    }
+}
+
+function setupAccessibleModals() {
+    document.querySelectorAll(".modal").forEach(modal => {
+        modal.inert = true;
+        modal.setAttribute("aria-hidden", "true");
+        modal.tabIndex = -1;
+    });
+    [
+        [fullBackupModal, hideFullBackupModal],
+        [fullRestoreModal, hideFullRestoreModal],
+        [jobImportModal, hideJobImportModal],
+        [sourceDiagnosticsModal, hideSourceDiagnostics],
+        [cleanupModal, hideCleanupModal],
+        [tailorModal, hideTailorModal],
+        [lifecycleModal, hideLifecycleModal],
+        [baseResumeHistoryModal, hideBaseResumeHistory],
+        [interviewPrepModal, requestCloseInterviewPrep],
+        [engagementModal, hideEngagementTracker]
+    ].forEach(([modal, dismiss]) => {
+        if (modal) modalDismissHandlers.set(modal, dismiss);
+    });
+    document.addEventListener("keydown", handleModalKeydown);
 }
 
 function safeHttpUrl(value) {
@@ -488,11 +626,11 @@ function openLifecycleEditor(jobId) {
     lifecycleFollowUp.value = formatDisplayDate(job.follow_up_date || "");
     lifecycleFollowUpCalendar.value = job.follow_up_date || "";
     lifecycleNotes.value = job.notes || "";
-    lifecycleModal.classList.add("active");
+    openAccessibleModal(lifecycleModal, lifecycleStatus);
 }
 
 function hideLifecycleModal() {
-    lifecycleModal.classList.remove("active");
+    closeAccessibleModal(lifecycleModal);
     lifecycleJobId = null;
 }
 
@@ -553,6 +691,19 @@ function setupTabSwitching() {
             const tabId = btn.getAttribute("data-tab");
             switchTab(tabId);
         });
+        btn.addEventListener("keydown", event => {
+            const buttons = Array.from(navButtons);
+            const currentIndex = buttons.indexOf(btn);
+            let nextIndex = null;
+            if (["ArrowRight", "ArrowDown"].includes(event.key)) nextIndex = (currentIndex + 1) % buttons.length;
+            if (["ArrowLeft", "ArrowUp"].includes(event.key)) nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+            if (event.key === "Home") nextIndex = 0;
+            if (event.key === "End") nextIndex = buttons.length - 1;
+            if (nextIndex === null) return;
+            event.preventDefault();
+            buttons[nextIndex].focus();
+            switchTab(buttons[nextIndex].getAttribute("data-tab"));
+        });
     });
 }
 
@@ -563,8 +714,12 @@ function switchTab(tabId) {
     navButtons.forEach(btn => {
         if (btn.getAttribute("data-tab") === tabId) {
             btn.classList.add("active");
+            btn.setAttribute("aria-selected", "true");
+            btn.tabIndex = 0;
         } else {
             btn.classList.remove("active");
+            btn.setAttribute("aria-selected", "false");
+            btn.tabIndex = -1;
         }
     });
     
@@ -572,8 +727,12 @@ function switchTab(tabId) {
     tabPanes.forEach(pane => {
         if (pane.id === `tab-${tabId}`) {
             pane.classList.add("active");
+            pane.setAttribute("aria-hidden", "false");
+            pane.inert = false;
         } else {
             pane.classList.remove("active");
+            pane.setAttribute("aria-hidden", "true");
+            pane.inert = true;
         }
     });
     
@@ -587,6 +746,7 @@ function switchTab(tabId) {
     
     pageTitle.innerText = tabTitles[tabId].title;
     pageSubtitle.innerText = tabTitles[tabId].sub;
+    announce(`${tabTitles[tabId].title} selected.`);
     
     // Reload data contextually
     if (tabId === "dashboard") {
@@ -601,16 +761,19 @@ function switchTab(tabId) {
 // Password Visibility Toggle
 function setupPasswordToggle() {
     [
-        [toggleApiVisibilityBtn, pApiKey],
-        [toggleOpenAIApiVisibilityBtn, pOpenAIApiKey],
-        [toggleGoogleApiVisibilityBtn, pGoogleApiKey]
-    ].forEach(([button, input]) => {
+        [toggleApiVisibilityBtn, pApiKey, "Gemini API key"],
+        [toggleOpenAIApiVisibilityBtn, pOpenAIApiKey, "OpenAI API key"],
+        [toggleGoogleApiVisibilityBtn, pGoogleApiKey, "Google Places API key"]
+    ].forEach(([button, input, label]) => {
         if (!button || !input) return;
+        button.setAttribute("aria-label", `Show ${label}`);
         button.addEventListener("click", () => {
             const type = input.getAttribute("type") === "password" ? "text" : "password";
             input.setAttribute("type", type);
             const icon = button.querySelector("i");
             icon.className = type === "password" ? "fa-solid fa-eye" : "fa-solid fa-eye-slash";
+            icon.setAttribute("aria-hidden", "true");
+            button.setAttribute("aria-label", `${type === "password" ? "Show" : "Hide"} ${label}`);
         });
     });
 }
@@ -618,19 +781,41 @@ function setupPasswordToggle() {
 // Modal tab controls
 function setupModalTabs() {
     modalTabBtns.forEach(btn => {
-        btn.addEventListener("click", () => {
+        const selectModalTab = () => {
             const target = btn.getAttribute("data-modal-tab");
-            
-            modalTabBtns.forEach(b => b.classList.remove("active"));
+            modalTabBtns.forEach(b => {
+                b.classList.remove("active");
+                b.setAttribute("aria-selected", "false");
+                b.tabIndex = -1;
+            });
             btn.classList.add("active");
-            
+            btn.setAttribute("aria-selected", "true");
+            btn.tabIndex = 0;
             modalTabContents.forEach(content => {
                 if (content.id === `modal-tab-${target}`) {
                     content.classList.add("active");
+                    content.setAttribute("aria-hidden", "false");
+                    content.inert = false;
                 } else {
                     content.classList.remove("active");
+                    content.setAttribute("aria-hidden", "true");
+                    content.inert = true;
                 }
             });
+        };
+        btn.addEventListener("click", selectModalTab);
+        btn.addEventListener("keydown", event => {
+            const buttons = Array.from(modalTabBtns);
+            const currentIndex = buttons.indexOf(btn);
+            let nextIndex = null;
+            if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % buttons.length;
+            if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+            if (event.key === "Home") nextIndex = 0;
+            if (event.key === "End") nextIndex = buttons.length - 1;
+            if (nextIndex === null) return;
+            event.preventDefault();
+            buttons[nextIndex].click();
+            buttons[nextIndex].focus();
         });
     });
 }
@@ -646,11 +831,11 @@ function showLoading(title, subtitle = "Please wait while CareerTrellis prepares
         createElement("i", "fa-solid fa-stop"),
         document.createTextNode(" Stop")
     );
-    loadingModal.classList.add("active");
+    openAccessibleModal(loadingModal, operation ? stopLoadingBtn : loadingTitle);
 }
 
 function hideLoading() {
-    loadingModal.classList.remove("active");
+    closeAccessibleModal(loadingModal);
     loadingActions.hidden = true;
     activeLoadingOperation = null;
 }
@@ -700,23 +885,21 @@ async function stopActiveLoadingOperation() {
 
 function showFullBackupModal() {
     fullBackupForm.reset();
-    fullBackupModal.classList.add("active");
-    window.setTimeout(() => fullBackupPassword.focus(), 0);
+    openAccessibleModal(fullBackupModal, fullBackupPassword);
 }
 
 function hideFullBackupModal() {
-    fullBackupModal.classList.remove("active");
+    closeAccessibleModal(fullBackupModal);
     fullBackupForm.reset();
 }
 
 function showFullRestoreModal() {
     fullRestoreForm.reset();
-    fullRestoreModal.classList.add("active");
-    window.setTimeout(() => fullRestoreFile.focus(), 0);
+    openAccessibleModal(fullRestoreModal, fullRestoreFile);
 }
 
 function hideFullRestoreModal() {
-    fullRestoreModal.classList.remove("active");
+    closeAccessibleModal(fullRestoreModal);
     fullRestoreForm.reset();
 }
 
@@ -837,15 +1020,15 @@ function showTailorModal(resumeMarkdown, coverLetterText, jobId) {
     downloadResumeDocxBtn.href = `${API_URL}/api/jobs/${jobId}/materials/resume.docx`;
     downloadCoverLetterBtn.href = `${API_URL}/api/jobs/${jobId}/materials/cover-letter`;
     openManualApplicationBtn.href = `${API_URL}/api/jobs/${jobId}/apply-manually`;
-    tailorModal.classList.add("active");
+    openAccessibleModal(tailorModal, tailoredResumeDisplay);
 }
 
 function hideTailorModal() {
-    tailorModal.classList.remove("active");
+    closeAccessibleModal(tailorModal);
 }
 
 function hideCleanupModal() {
-    cleanupModal.classList.remove("active");
+    closeAccessibleModal(cleanupModal);
     cleanupActionsReady = false;
     if (cleanupActionEnableTimer) clearTimeout(cleanupActionEnableTimer);
 }
@@ -862,12 +1045,11 @@ function showJobImportModal() {
     jobImportFields.hidden = true;
     jobImportMessage.hidden = true;
     saveJobImportBtn.disabled = true;
-    jobImportModal.classList.add("active");
-    jobImportUrl.focus();
+    openAccessibleModal(jobImportModal, jobImportUrl);
 }
 
 function hideJobImportModal() {
-    jobImportModal.classList.remove("active");
+    closeAccessibleModal(jobImportModal);
     jobImportCanonicalUrl = null;
 }
 
@@ -1011,7 +1193,7 @@ async function showCleanupPreview() {
 
         await loadJobSuppressions();
         hideLoading();
-        cleanupModal.classList.add("active");
+        openAccessibleModal(cleanupModal, document.getElementById("close-cleanup-modal"));
         cleanupActionEnableTimer = setTimeout(() => {
             cleanupActionsReady = true;
             archiveUntouchedBtn.disabled = result.actions.archive.count === 0;
@@ -1618,7 +1800,7 @@ async function showBaseResumeHistory() {
             button.addEventListener("click", () => previewBaseResumeVersion(version.version_number, button));
             baseResumeVersionList.appendChild(button);
         });
-        baseResumeHistoryModal.classList.add("active");
+        openAccessibleModal(baseResumeHistoryModal, () => baseResumeVersionList.querySelector("button"));
     } catch (error) {
         alert(error.message);
     }
@@ -1660,7 +1842,7 @@ async function restoreSelectedBaseResumeVersion() {
 }
 
 function hideBaseResumeHistory() {
-    baseResumeHistoryModal.classList.remove("active");
+    closeAccessibleModal(baseResumeHistoryModal);
     selectedBaseResumeVersion = null;
 }
 
@@ -1998,16 +2180,12 @@ function renderFilteredJobs(revealJobId = null) {
         const filterSummary = activeAdvancedFilters ? ` · ${activeAdvancedFilters} advanced` : "";
         resultCount.textContent = `${jobs.length} of ${loadedJobs.length} jobs${filterSummary}`;
     }
+    if (jobResultsStatus) {
+        jobResultsStatus.textContent = `${jobs.length} of ${loadedJobs.length} job postings shown.`;
+    }
 
     if (jobs.length === 0) {
-            jobsTableBody.innerHTML = `
-                <tr>
-                    <td colspan="7" class="table-empty-state">
-                        <i class="fa-solid fa-briefcase"></i>
-                        <p>No jobs match the current filters.</p>
-                    </td>
-                </tr>
-            `;
+        renderEmptyTableState(jobsTableBody, 7, "fa-solid fa-briefcase", "No jobs match the current filters.");
         return viewChanges.join(" ");
     }
     jobs.forEach(job => jobsTableBody.appendChild(buildJobRow(job)));
@@ -2359,13 +2537,11 @@ async function refreshSourceDiagnosticCount() {
     }
 }
 
-async function showSourceDiagnostics(event) {
-    sourceDiagnosticsOpener = event?.currentTarget || openSourceDiagnosticsBtn;
+async function showSourceDiagnostics() {
     sourceDiagnosticsEmpty.hidden = false;
     sourceDiagnosticsEmpty.textContent = "Loading source diagnostic history...";
     sourceDiagnosticsList.replaceChildren();
-    sourceDiagnosticsModal.classList.add("active");
-    document.getElementById("close-source-diagnostics-modal").focus();
+    openAccessibleModal(sourceDiagnosticsModal, document.getElementById("close-source-diagnostics-modal"));
     try {
         await loadSourceDiagnostics();
     } catch (error) {
@@ -2375,8 +2551,7 @@ async function showSourceDiagnostics(event) {
 }
 
 function hideSourceDiagnostics() {
-    sourceDiagnosticsModal.classList.remove("active");
-    if (sourceDiagnosticsOpener?.isConnected) sourceDiagnosticsOpener.focus();
+    closeAccessibleModal(sourceDiagnosticsModal);
 }
 
 async function loadSourceDiagnostics() {
@@ -2548,11 +2723,12 @@ async function openInterviewPreparation(jobId) {
             ? `Saved locally${result.updated_at ? ` · ${String(result.updated_at).replace("T", " ")}` : ""}`
             : "Local starter — not yet saved";
         updateInterviewPrepMeta();
-        interviewPrepModal.classList.add("active");
-        interviewPrepContent.focus();
-        interviewPrepContent.setSelectionRange(0, 0);
-        interviewPrepContent.scrollTop = 0;
-        interviewPrepBody.scrollTop = 0;
+        openAccessibleModal(interviewPrepModal, interviewPrepContent);
+        window.setTimeout(() => {
+            interviewPrepContent.setSelectionRange(0, 0);
+            interviewPrepContent.scrollTop = 0;
+            interviewPrepBody.scrollTop = 0;
+        }, 0);
     } catch (error) {
         alert(error.message);
     }
@@ -2562,7 +2738,7 @@ function requestCloseInterviewPrep() {
     if (!interviewPrepModal.classList.contains("active")) return;
     if (interviewPrepContent.value !== interviewPrepSnapshot
         && !confirm("Close without saving your interview-preparation changes?")) return;
-    interviewPrepModal.classList.remove("active");
+    closeAccessibleModal(interviewPrepModal);
     interviewPrepJobId = null;
     interviewPrepSnapshot = "";
 }
@@ -2701,7 +2877,7 @@ function resetEngagementForm() {
 }
 
 function hideEngagementTracker() {
-    engagementModal.classList.remove("active");
+    closeAccessibleModal(engagementModal);
     engagementJobId = null;
     engagementRecords = [];
     resetEngagementForm();
@@ -2770,10 +2946,9 @@ async function openEngagementTracker(jobId) {
     engagementList.textContent = "";
     engagementEmpty.hidden = true;
     resetEngagementForm();
-    engagementModal.classList.add("active");
+    openAccessibleModal(engagementModal, engagementName);
     try {
         await loadEngagementRecords();
-        engagementName.focus();
     } catch (error) {
         hideEngagementTracker();
         alert(error.message);
@@ -2861,17 +3036,16 @@ async function loadLogs() {
         const res = await fetch(`${API_URL}/api/applications`);
         const logs = await res.json();
         
-        logsTableBody.innerHTML = "";
+        logsTableBody.replaceChildren();
         
         if (!logs || logs.length === 0) {
-            logsTableBody.innerHTML = `
-                <tr>
-                    <td colspan="7" class="table-empty-state">
-                        <i class="fa-solid fa-paper-plane"></i>
-                        <p>No application materials yet. Tailor a job from the "Search & Match" tab.</p>
-                    </td>
-                </tr>
-            `;
+            renderEmptyTableState(
+                logsTableBody,
+                7,
+                "fa-solid fa-paper-plane",
+                "No application materials yet. Tailor a job from the Search & Match tab."
+            );
+            if (applicationResultsStatus) applicationResultsStatus.textContent = "No application records found.";
             return;
         }
         
@@ -2960,8 +3134,12 @@ async function loadLogs() {
             
             logsTableBody.appendChild(tr);
         });
+        if (applicationResultsStatus) {
+            applicationResultsStatus.textContent = `${logs.length} application record${logs.length === 1 ? "" : "s"} shown.`;
+        }
     } catch (e) {
         console.error(e);
+        if (applicationResultsStatus) applicationResultsStatus.textContent = "Application records could not be loaded.";
         logActivity("Error Loading Logs", "Could not query application logs database.", "error");
     }
 }
