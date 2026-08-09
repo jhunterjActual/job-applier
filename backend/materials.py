@@ -38,9 +38,19 @@ def resolve_output_file(raw_path: str, expected_suffix: str, output_dir: Path | 
     return candidate
 
 
-def material_download_name(company: str, position: str, artifact: str, suffix: str) -> str:
-    """Create a recruiter-friendly filename without path or control characters."""
-    source = f"{company or 'company'}-{position or 'position'}-{artifact}"
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", source).strip("-").lower()
-    slug = slug[:100].rstrip("-") or artifact
+def material_download_name(
+    company: str,
+    position: str,
+    artifact: str,
+    suffix: str,
+    *,
+    candidate_name: str = "",
+) -> str:
+    """Create a recruiter-friendly filename led by the candidate when known."""
+    identity = "-".join(part for part in (candidate_name, company or "company", position or "position") if part)
+    identity_slug = re.sub(r"[^A-Za-z0-9]+", "-", identity).strip("-").lower()
+    artifact_slug = re.sub(r"[^A-Za-z0-9]+", "-", artifact).strip("-").lower() or "file"
+    identity_budget = max(1, 120 - len(artifact_slug) - 1)
+    identity_slug = identity_slug[:identity_budget].rstrip("-") or "document"
+    slug = f"{identity_slug}-{artifact_slug}"
     return f"{slug}{suffix}"

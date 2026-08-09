@@ -103,7 +103,14 @@ from tailor import (
     finalize_cover_letter,
     tailor_resume_and_cover_letter,
 )
-from utils import _headquarters_query, _looks_like_us_address, find_us_headquarters, markdown_to_html
+from utils import (
+    _headquarters_query,
+    _looks_like_us_address,
+    find_us_headquarters,
+    generate_resume_pdf,
+    markdown_to_html,
+    resume_pdf_metadata,
+)
 
 
 class OperationCancellationTests(unittest.TestCase):
@@ -393,6 +400,14 @@ class ApplicationMaterialsSafetyTests(unittest.TestCase):
         filename = material_download_name("Example / Corp", "VP: Data & AI", "cover-letter", ".txt")
         self.assertEqual("example-corp-vp-data-ai-cover-letter.txt", filename)
         self.assertNotIn("/", filename)
+        candidate_filename = material_download_name(
+            "Example / Corp",
+            "VP: Data & AI",
+            "resume",
+            ".pdf",
+            candidate_name="J. Candidate",
+        )
+        self.assertEqual("j-candidate-example-corp-vp-data-ai-resume.pdf", candidate_filename)
 
     def test_stopped_pdf_regeneration_preserves_previous_materials(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -404,15 +419,16 @@ class ApplicationMaterialsSafetyTests(unittest.TestCase):
             cover_path.write_text("Old letter\n", encoding="utf-8")
             connection = sqlite3.connect(database_path)
             connection.executescript("""
-                CREATE TABLE profile (id INTEGER PRIMARY KEY, resume_mode TEXT);
+                CREATE TABLE profile (id INTEGER PRIMARY KEY, name TEXT, resume_mode TEXT);
                 CREATE TABLE applications (
-                    id INTEGER PRIMARY KEY, job_id INTEGER, tailored_resume_text TEXT,
+                    id INTEGER PRIMARY KEY, job_id INTEGER, company TEXT, position TEXT,
+                    tailored_resume_text TEXT,
                     tailored_resume_path TEXT, cover_letter_path TEXT, cover_letter TEXT
                 );
-                INSERT INTO profile VALUES (1, 'general_professional');
+                INSERT INTO profile VALUES (1, 'Candidate Name', 'general_professional');
             """)
             connection.execute(
-                "INSERT INTO applications VALUES (1, 1, ?, ?, ?, ?)",
+                "INSERT INTO applications VALUES (1, 1, 'Example Corp', 'Data Leader', ?, ?, ?, ?)",
                 ("Old resume", str(resume_path), str(cover_path), "Old letter"),
             )
             connection.commit()
@@ -425,8 +441,9 @@ class ApplicationMaterialsSafetyTests(unittest.TestCase):
 
             operation_id = str(uuid4())
 
-            def stop_after_render(markdown, output_path, max_pages=2):
+            def stop_after_render(markdown, output_path, max_pages=2, **kwargs):
                 Path(output_path).write_bytes(b"new staged pdf")
+                self.assertEqual("Candidate Name", kwargs["metadata"]["author"])
                 self.assertTrue(app_module.cancel_operation(operation_id)["active"])
                 return {"page_count": 1, "compact": False}
 
@@ -477,6 +494,8 @@ class ApplicationMaterialsSafetyTests(unittest.TestCase):
 
             connection = sqlite3.connect(database_path)
             connection.executescript("""
+                CREATE TABLE profile (id INTEGER PRIMARY KEY, name TEXT);
+                INSERT INTO profile VALUES (1, 'Candidate Name');
                 CREATE TABLE jobs (
                     id INTEGER PRIMARY KEY, company TEXT, title TEXT, url TEXT,
                     source TEXT, status TEXT
@@ -511,8 +530,8 @@ class ApplicationMaterialsSafetyTests(unittest.TestCase):
                 cover_response = app_module.download_cover_letter(1)
                 redirect_response = app_module.open_manual_application(1)
 
-            self.assertIn("example-corp-vp-data-resume.pdf", resume_response.headers["content-disposition"])
-            self.assertIn("example-corp-vp-data-cover-letter.txt", cover_response.headers["content-disposition"])
+            self.assertIn("candidate-name-example-corp-vp-data-resume.pdf", resume_response.headers["content-disposition"])
+            self.assertIn("candidate-name-example-corp-vp-data-cover-letter.txt", cover_response.headers["content-disposition"])
             self.assertEqual("https://jobs.example.test/1", redirect_response.headers["location"])
             connection = connection_factory()
             self.assertEqual("tailored", connection.execute("SELECT status FROM jobs WHERE id = 1").fetchone()[0])
@@ -665,7 +684,7 @@ class ResumeDocumentInteroperabilityTests(unittest.TestCase):
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             response.media_type,
         )
-        self.assertIn("example-corp-data-leader-resume-accessible.docx", response.headers["content-disposition"])
+        self.assertIn("candidate-name-example-corp-data-leader-resume-accessible.docx", response.headers["content-disposition"])
         loaded = WordDocument(io.BytesIO(response.body))
         self.assertEqual("Candidate Name", loaded.paragraphs[0].text)
 
@@ -717,7 +736,9 @@ class ResumeRenderingTests(unittest.TestCase):
     def test_markdown_is_escaped_and_supported_tokens_are_rendered(self) -> None:
         rendered = markdown_to_html(
             "# Candidate\n\n---\n\n## Experience\n\n### Role\n\n"
-            "- Delivered **measurable** results with *care*.\n\n<script>alert(1)</script>"
+            "- Delivered **measurable** results with *care*.\n\n"
+            "candidate@example.com | (937) 555-0123 | https://example.com | "
+            "[Portfolio](https://portfolio.example.com)\n\n<script>alert(1)</script>"
         )
         self.assertIn("<hr>", rendered)
         self.assertIn("<strong>measurable</strong>", rendered)
@@ -725,6 +746,56 @@ class ResumeRenderingTests(unittest.TestCase):
         self.assertNotIn("<script>", rendered)
         self.assertIn("&lt;script&gt;", rendered)
         self.assertIn('<section class="resume-section">', rendered)
+        self.assertIn('href="mailto:candidate@example.com"', rendered)
+        self.assertIn('href="tel:9375550123"', rendered)
+        self.assertIn('href="https://example.com"', rendered)
+        self.assertIn('href="https://portfolio.example.com">Portfolio</a>', rendered)
+
+
+class ResumePdfAccessibilityTests(unittest.TestCase):
+    def test_generated_pdf_has_metadata_tags_outline_and_clickable_contacts(self) -> None:
+        markdown = (
+            "# J. Candidate\n\n"
+            "candidate@example.com | (937) 555-0123 | https://example.com | "
+            "linkedin.com/in/j-candidate\n\n"
+            "## Professional Summary\n\nEvidence-based leader.\n\n"
+            "## Experience\n\n### Director | Example Corp\n\n"
+            "- Delivered a measurable business result."
+        )
+        metadata = resume_pdf_metadata("J. Candidate", "Data Leader", "Example Corp")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "candidate-resume.pdf"
+            result = generate_resume_pdf(markdown, str(output_path), metadata=metadata)
+            content = output_path.read_bytes()
+            document = pymupdf.open(output_path)
+            try:
+                properties = document.metadata
+                links = {
+                    link["uri"]
+                    for page in document
+                    for link in page.get_links()
+                    if link.get("uri")
+                }
+                outline = document.get_toc()
+                extracted_text = "\n".join(page.get_text() for page in document)
+            finally:
+                document.close()
+
+        self.assertEqual(1, result["page_count"])
+        self.assertEqual("J. Candidate - Data Leader Resume", properties["title"])
+        self.assertEqual("J. Candidate", properties["author"])
+        self.assertEqual("Resume prepared for Data Leader at Example Corp", properties["subject"])
+        self.assertEqual("CareerTrellis", properties["creator"])
+        self.assertIn("mailto:candidate@example.com", links)
+        self.assertIn("tel:9375550123", links)
+        self.assertIn("https://example.com/", links)
+        self.assertIn("https://linkedin.com/in/j-candidate", links)
+        self.assertIn("Professional Summary", extracted_text)
+        self.assertTrue(any(item[1] == "Professional Summary" for item in outline))
+        self.assertIn(b"/StructTreeRoot", content)
+        self.assertIn(b"/MarkInfo", content)
+        self.assertRegex(content, rb"/Marked\s+true")
+        self.assertRegex(content, rb"/Lang\s*\(en-US\)")
 
 
 class JobFilterFacetTests(unittest.TestCase):
@@ -871,8 +942,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-17", html_source)
-        self.assertIn("index.css?v=20260808-17", html_source)
+        self.assertIn("app.js?v=20260808-18", html_source)
+        self.assertIn("index.css?v=20260808-18", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -880,7 +951,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.17", source)
+                self.assertIn("20260808.18", source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -1614,7 +1685,7 @@ class UserDataExportTests(unittest.TestCase):
 
 class EncryptedFullBackupTests(unittest.TestCase):
     PASSWORD = "correct horse battery staple"
-    BUILD = "20260808.17"
+    BUILD = "20260808.18"
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
