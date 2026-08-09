@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-18">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-19">
 </head>
 <body>
     <div class="app-container">
@@ -667,7 +667,7 @@
                                         <th>Headquarters Address</th>
                                         <th>Status</th>
                                         <th>Files</th>
-                                        <th>Preparation</th>
+                                        <th>Preparation &amp; Contacts</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1116,6 +1116,96 @@
         </div>
     </div>
 
+    <!-- Local relationship and assessment tracker -->
+    <div class="modal" id="engagement-modal" role="dialog" aria-modal="true" aria-labelledby="engagement-title">
+        <div class="modal-content engagement-modal-content">
+            <div class="modal-header">
+                <div>
+                    <h2 id="engagement-title">People &amp; Application Steps</h2>
+                    <p class="text-muted" id="engagement-job-label"></p>
+                </div>
+                <button type="button" class="close-modal-btn" id="close-engagement-modal" aria-label="Close people and application steps"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body engagement-layout">
+                <form id="engagement-form" class="engagement-form">
+                    <input type="hidden" id="engagement-id">
+                    <div class="engagement-form-heading">
+                        <div>
+                            <h3 id="engagement-form-title">Add a person or step</h3>
+                            <p class="form-help">Stored only in this CareerTrellis workspace and its exports or encrypted backups.</p>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="cancel-engagement-edit-btn" hidden>Cancel edit</button>
+                    </div>
+                    <div class="form-grid engagement-form-grid">
+                        <div class="form-group">
+                            <label for="engagement-type">Type</label>
+                            <select id="engagement-type" required>
+                                <option value="recruiter">Recruiter</option>
+                                <option value="hiring_manager">Hiring manager</option>
+                                <option value="referral">Referral</option>
+                                <option value="networking">Networking contact</option>
+                                <option value="assessment">Assessment or exercise</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="engagement-name">Person or step name</label>
+                            <input type="text" id="engagement-name" maxlength="160" required placeholder="Alex Smith or Technical assessment">
+                        </div>
+                        <div class="form-group">
+                            <label for="engagement-organization">Organization or relationship</label>
+                            <input type="text" id="engagement-organization" maxlength="160" placeholder="Employer, agency, or how you know them">
+                        </div>
+                        <div class="form-group">
+                            <label for="engagement-contact">Contact or reference</label>
+                            <input type="text" id="engagement-contact" maxlength="320" placeholder="Email, phone, profile, or assessment reference">
+                        </div>
+                        <div class="form-group">
+                            <label for="engagement-status">Status</label>
+                            <select id="engagement-status" required>
+                                <option value="planned">Planned</option>
+                                <option value="contacted">Contacted</option>
+                                <option value="waiting">Waiting</option>
+                                <option value="scheduled">Scheduled</option>
+                                <option value="completed">Completed</option>
+                                <option value="closed">Closed</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="engagement-activity-on">Activity date</label>
+                            <input type="date" id="engagement-activity-on">
+                        </div>
+                        <div class="form-group">
+                            <label for="engagement-next-action-on">Next action or due date</label>
+                            <input type="date" id="engagement-next-action-on">
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="engagement-notes">Notes</label>
+                            <textarea id="engagement-notes" rows="3" maxlength="4000" placeholder="Conversation context, requested follow-up, assessment instructions, or next step"></textarea>
+                        </div>
+                    </div>
+                    <div class="engagement-form-actions">
+                        <span id="engagement-form-status" class="form-help" role="status" aria-live="polite"></span>
+                        <button type="submit" class="btn btn-primary" id="save-engagement-btn">
+                            <i class="fa-solid fa-floppy-disk"></i> Save Record
+                        </button>
+                    </div>
+                </form>
+                <section class="engagement-records" aria-labelledby="engagement-records-title">
+                    <div class="engagement-records-heading">
+                        <h3 id="engagement-records-title">Saved records <span class="cleanup-count-badge" id="engagement-count">0</span></h3>
+                    </div>
+                    <p class="text-muted" id="engagement-empty">No people or application steps recorded yet.</p>
+                    <div id="engagement-list" class="engagement-list" aria-live="polite"></div>
+                </section>
+            </div>
+            <div class="modal-footer">
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="close-engagement-modal-btn">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Base Resume History Modal -->
     <div class="modal" id="base-resume-history-modal" role="dialog" aria-modal="true" aria-labelledby="base-resume-history-title">
         <div class="modal-content">
@@ -1167,6 +1257,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-18"></script>
+    <script src="/static/app.js?v=20260808-19"></script>
 </body>
 </html>

@@ -37,6 +37,14 @@ from maps_providers import (
     validate_maps_provider,
 )
 from application_insights import build_application_insights
+from application_engagements import (
+    EngagementLimitError,
+    EngagementNotFound,
+    create_engagement,
+    delete_engagement,
+    list_engagements,
+    update_engagement,
+)
 from data_export import build_user_data_export
 from database import get_db_connection, init_db
 from backup_restore import (
@@ -103,7 +111,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.18"
+APP_BUILD = "20260808.19"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -328,6 +336,17 @@ class MaterialsUpdateRequest(BaseModel):
 
 class InterviewPrepUpdateRequest(BaseModel):
     content: str = Field(min_length=1, max_length=MAX_INTERVIEW_PREP_CHARS)
+
+
+class ApplicationEngagementRequest(BaseModel):
+    engagement_type: Literal["recruiter", "hiring_manager", "referral", "networking", "assessment"]
+    name: str = Field(min_length=1, max_length=160)
+    organization: str = Field(default="", max_length=160)
+    contact_details: str = Field(default="", max_length=320)
+    status: Literal["planned", "contacted", "waiting", "scheduled", "completed", "closed"] = "planned"
+    activity_on: Optional[date] = None
+    next_action_on: Optional[date] = None
+    notes: str = Field(default="", max_length=4000)
 
 
 class FullBackupRequest(BaseModel):
@@ -2205,6 +2224,63 @@ def generate_job_interview_prep(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 # Applications logs endpoint
+@app.get("/api/jobs/{job_id}/engagements")
+def get_job_engagements(job_id: int) -> dict:
+    """Load locally tracked people, relationship activity, and assessment steps."""
+    conn = get_db_connection()
+    try:
+        return list_engagements(conn, job_id)
+    except EngagementNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.post("/api/jobs/{job_id}/engagements", status_code=201)
+def add_job_engagement(job_id: int, req: ApplicationEngagementRequest) -> dict:
+    """Create one bounded, local relationship or assessment record."""
+    conn = get_db_connection()
+    try:
+        return create_engagement(conn, job_id, req.model_dump())
+    except EngagementNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (EngagementLimitError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.put("/api/jobs/{job_id}/engagements/{engagement_id}")
+def edit_job_engagement(
+    job_id: int,
+    engagement_id: int,
+    req: ApplicationEngagementRequest,
+) -> dict:
+    """Edit a selected local relationship or assessment record."""
+    conn = get_db_connection()
+    try:
+        return update_engagement(conn, job_id, engagement_id, req.model_dump())
+    except EngagementNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@app.delete("/api/jobs/{job_id}/engagements/{engagement_id}")
+def remove_job_engagement(job_id: int, engagement_id: int) -> dict:
+    """Delete one explicitly selected local tracking record."""
+    conn = get_db_connection()
+    try:
+        delete_engagement(conn, job_id, engagement_id)
+        return {"success": True, "deleted": engagement_id}
+    except EngagementNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        conn.close()
+
+
 @app.get("/api/applications")
 def get_applications() -> list[dict]:
     """
@@ -2215,7 +2291,8 @@ def get_applications() -> list[dict]:
     """
     conn = get_db_connection()
     rows = conn.execute("""
-    SELECT a.*, j.url 
+    SELECT a.*, j.url,
+           (SELECT COUNT(*) FROM application_engagements e WHERE e.job_id = a.job_id) AS engagement_count
     FROM applications a
     LEFT JOIN jobs j ON a.job_id = j.id
     ORDER BY a.date_applied DESC

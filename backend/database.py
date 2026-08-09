@@ -168,6 +168,30 @@ def init_db() -> None:
     """)
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS application_engagements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL,
+        engagement_type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        organization TEXT NOT NULL DEFAULT '',
+        contact_details TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'planned',
+        activity_on TEXT,
+        next_action_on TEXT,
+        notes TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_application_engagements_job ON application_engagements(job_id, updated_at DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_application_engagements_next_action ON application_engagements(next_action_on)"
+    )
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS job_suppressions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         url_fingerprint TEXT NOT NULL UNIQUE,

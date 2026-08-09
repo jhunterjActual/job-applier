@@ -12,6 +12,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import app as app_module
+import application_engagements as application_engagements_module
 import ai_providers as ai_providers_module
 import backup_restore as backup_restore_module
 import maps_providers as maps_providers_module
@@ -21,6 +22,13 @@ import operations as operations_module
 import searcher as searcher_module
 import source_diagnostics as source_diagnostics_module
 from application_insights import build_application_insights
+from application_engagements import (
+    EngagementNotFound,
+    create_engagement,
+    delete_engagement,
+    list_engagements,
+    update_engagement,
+)
 from data_export import EXPORT_FORMAT, EXPORT_SCHEMA_VERSION, build_user_data_export
 from backup_restore import (
     BackupAuthenticationError,
@@ -933,6 +941,12 @@ class FrontendStartupTests(unittest.TestCase):
             "interview-prep-character-count", "generate-interview-prep-btn",
             "save-interview-prep-btn", "download-interview-prep-btn",
             "print-interview-prep-btn", "interview-prep-print",
+            "engagement-modal", "engagement-job-label", "engagement-form",
+            "engagement-id", "engagement-type", "engagement-name",
+            "engagement-organization", "engagement-contact", "engagement-status",
+            "engagement-activity-on", "engagement-next-action-on", "engagement-notes",
+            "engagement-count", "engagement-empty", "engagement-list",
+            "save-engagement-btn", "cancel-engagement-edit-btn",
             "export-user-data-btn",
             "open-full-backup-btn", "full-backup-modal", "full-backup-form",
             "full-backup-password", "full-backup-confirm-password",
@@ -942,8 +956,8 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-18", html_source)
-        self.assertIn("index.css?v=20260808-18", html_source)
+        self.assertIn("app.js?v=20260808-19", html_source)
+        self.assertIn("index.css?v=20260808-19", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -951,7 +965,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.18", source)
+                self.assertIn("20260808.19", source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -1000,6 +1014,19 @@ class FrontendStartupTests(unittest.TestCase):
         self.assertIn("showCancellableLoading", script_source)
         self.assertIn("interviewPrepPrintContent.textContent = firstHeading", script_source)
         self.assertNotIn("interviewPrepPrintContent.innerHTML", script_source)
+
+    def test_relationship_and_assessment_tracking_uses_safe_local_crud(self) -> None:
+        script_source = (Path(__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("openEngagementTracker(log.job_id)", script_source)
+        self.assertIn("/engagements/${recordId}", script_source)
+        self.assertIn('method: recordId ? "PUT" : "POST"', script_source)
+        self.assertIn('method: "DELETE"', script_source)
+        tracker_source = script_source[
+            script_source.index("function renderEngagementRecords"):
+            script_source.index("// Load generated materials")
+        ]
+        self.assertNotIn("innerHTML", tracker_source)
+        self.assertIn("textContent", tracker_source)
 
     def test_launchers_use_the_configurable_default_port(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -1573,6 +1600,11 @@ class UserDataExportTests(unittest.TestCase):
                 id INTEGER PRIMARY KEY, job_id INTEGER, from_status TEXT, to_status TEXT,
                 changed_at TEXT, source TEXT, notes TEXT, undone_at TEXT
             );
+            CREATE TABLE application_engagements (
+                id INTEGER PRIMARY KEY, job_id INTEGER, engagement_type TEXT, name TEXT,
+                organization TEXT, contact_details TEXT, status TEXT, activity_on TEXT,
+                next_action_on TEXT, notes TEXT, created_at TEXT, updated_at TEXT
+            );
             CREATE TABLE job_suppressions (
                 id INTEGER PRIMARY KEY, url_fingerprint TEXT, hostname TEXT, company TEXT,
                 title TEXT, deleted_at TEXT, deletion_source TEXT
@@ -1612,6 +1644,11 @@ class UserDataExportTests(unittest.TestCase):
             );
             INSERT INTO application_status_history VALUES (
                 60, 30, 'matched', 'applied', '2026-08-03', 'manual', 'Applied online', NULL
+            );
+            INSERT INTO application_engagements VALUES (
+                65, 30, 'recruiter', 'Alex Recruiter', 'Example Co',
+                'alex@example.test', 'waiting', '2026-08-03', '2026-08-10',
+                'Send portfolio follow-up', '2026-08-03T09:00:00', '2026-08-03T09:00:00'
             );
             INSERT INTO job_suppressions VALUES (
                 70, 'private-url-fingerprint', 'jobs.example.test', 'Other Co',
@@ -1654,7 +1691,10 @@ class UserDataExportTests(unittest.TestCase):
         self.assertEqual({"skills": "Analysis"}, payload["base_resumes"][0]["professional_evidence"])
         self.assertTrue(payload["applications"][0]["submission_evidence"]["confirmed_by_user"])
         self.assertEqual({"rejected": 7}, payload["source_diagnostics"][0]["counters"])
+        self.assertEqual("Alex Recruiter", payload["application_engagements"][0]["name"])
+        self.assertEqual("2026-08-10", payload["application_engagements"][0]["next_action_on"])
         self.assertEqual(1, payload["counts"]["jobs"])
+        self.assertEqual(1, payload["counts"]["application_engagements"])
 
         encoded = json.dumps(payload)
         for forbidden in (
@@ -1681,12 +1721,12 @@ class UserDataExportTests(unittest.TestCase):
             response.headers["content-disposition"],
             r'^attachment; filename="career-trellis-user-data-\d{4}-\d{2}-\d{2}\.json"$',
         )
-        self.assertIn('\n  "schema_version": 1,', response.text)
+        self.assertIn('\n  "schema_version": 2,', response.text)
 
 
 class EncryptedFullBackupTests(unittest.TestCase):
     PASSWORD = "correct horse battery staple"
-    BUILD = "20260808.18"
+    BUILD = "20260808.19"
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -1712,12 +1752,20 @@ class EncryptedFullBackupTests(unittest.TestCase):
                 id INTEGER PRIMARY KEY, job_id INTEGER,
                 tailored_resume_path TEXT, cover_letter_path TEXT
             );
+            CREATE TABLE application_engagements (
+                id INTEGER PRIMARY KEY, job_id INTEGER, engagement_type TEXT,
+                name TEXT, status TEXT, created_at TEXT, updated_at TEXT
+            );
         """)
         connection.execute("INSERT INTO profile VALUES (1, ?, ?)", (name, secret))
         connection.execute("INSERT INTO jobs VALUES (1, ?)", (f"{name} role",))
         connection.execute(
             "INSERT INTO applications VALUES (1, 1, ?, ?)",
             (str(resume.resolve()), str(letter.resolve())),
+        )
+        connection.execute(
+            "INSERT INTO application_engagements VALUES (1, 1, 'recruiter', ?, 'waiting', '2026-08-08', '2026-08-08')",
+            (f"{name} recruiter",),
         )
         connection.commit()
         connection.close()
@@ -1770,9 +1818,13 @@ class EncryptedFullBackupTests(unittest.TestCase):
         material_paths = connection.execute(
             "SELECT tailored_resume_path, cover_letter_path FROM applications WHERE id = 1"
         ).fetchone()
+        engagement_name = connection.execute(
+            "SELECT name FROM application_engagements WHERE id = 1"
+        ).fetchone()[0]
         connection.close()
         self.assertEqual(str((destination_output / "resume.pdf").resolve()), material_paths[0])
         self.assertEqual(str((destination_output / "cover.txt").resolve()), material_paths[1])
+        self.assertEqual("source recruiter", engagement_name)
 
         recovery_directory = Path(restored.recovery_directory)
         self.assertEqual(("current", "current-api-secret"), self.profile(recovery_directory / "database.sqlite3"))
@@ -3149,8 +3201,11 @@ class SourceDiagnosticHistoryTests(unittest.TestCase):
         self.assertIn("headquarters_cache", tables)
         self.assertIn("base_resumes", tables)
         self.assertIn("base_resume_versions", tables)
+        self.assertIn("application_engagements", tables)
         self.assertIn("idx_source_diagnostics_recorded_at", indexes)
         self.assertIn("idx_base_resume_versions_resume", indexes)
+        self.assertIn("idx_application_engagements_job", indexes)
+        self.assertIn("idx_application_engagements_next_action", indexes)
         self.assertIn("maps_provider", profile_columns)
         self.assertIn("active_base_resume_id", profile_columns)
         self.assertIn("evidence_json", base_resume_columns)
@@ -3238,7 +3293,7 @@ class LifecycleSchemaTests(unittest.TestCase):
         self.assertTrue({
             "application_status_history", "saved_searches", "job_suppressions",
             "source_diagnostics", "headquarters_cache", "base_resumes",
-            "base_resume_versions",
+            "base_resume_versions", "application_engagements",
         }.issubset(tables))
         saved_search_columns = {row[1] for row in connection.execute("PRAGMA table_info(saved_searches)")}
         self.assertTrue({"schedule_frequency", "next_alert_at"}.issubset(saved_search_columns))
@@ -3449,6 +3504,138 @@ class InterviewPreparationEndpointTests(unittest.TestCase):
         connection.close()
         self.assertTrue(result["cancelled"])
         self.assertEqual("# Existing notes", saved)
+
+
+class ApplicationEngagementTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "engagements.db"
+        connection = sqlite3.connect(self.db_path)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.executescript("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY, company TEXT, title TEXT, url TEXT
+            );
+            CREATE TABLE applications (
+                id INTEGER PRIMARY KEY, job_id INTEGER, company TEXT, position TEXT,
+                date_applied TEXT, created_at TEXT, status TEXT
+            );
+            CREATE TABLE application_engagements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                engagement_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                organization TEXT NOT NULL DEFAULT '',
+                contact_details TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'planned',
+                activity_on TEXT,
+                next_action_on TEXT,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+            );
+            INSERT INTO jobs VALUES (7, 'Example Co', 'Data Leader', 'https://jobs.example.test/7');
+            INSERT INTO applications VALUES (1, 7, 'Example Co', 'Data Leader', '2026-08-08', '2026-08-08', 'applied');
+        """)
+        connection.commit()
+        connection.close()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def connection_factory(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    @staticmethod
+    def payload(**overrides) -> dict:
+        values = {
+            "engagement_type": "recruiter",
+            "name": "Alex Recruiter",
+            "organization": "Example Co",
+            "contact_details": "alex@example.test",
+            "status": "waiting",
+            "activity_on": date(2026, 8, 8),
+            "next_action_on": date(2026, 8, 12),
+            "notes": "Send the requested portfolio.",
+        }
+        values.update(overrides)
+        return values
+
+    def test_local_crud_orders_next_actions_and_cascades_with_job(self) -> None:
+        connection = self.connection_factory()
+        recruiter = create_engagement(connection, 7, self.payload())
+        assessment = create_engagement(connection, 7, self.payload(
+            engagement_type="assessment",
+            name="Architecture exercise",
+            contact_details="Assessment portal reference 123",
+            status="scheduled",
+            next_action_on=date(2026, 8, 10),
+        ))
+
+        records = list_engagements(connection, 7)
+        self.assertEqual(2, records["count"])
+        self.assertEqual("Architecture exercise", records["engagements"][0]["name"])
+        self.assertEqual("2026-08-10", records["engagements"][0]["next_action_on"])
+
+        updated = update_engagement(connection, 7, recruiter["id"], self.payload(
+            status="completed", notes="Portfolio sent."
+        ))
+        self.assertEqual("completed", updated["status"])
+        self.assertEqual("Portfolio sent.", updated["notes"])
+
+        self.assertTrue(delete_engagement(connection, 7, assessment["id"]))
+        with self.assertRaisesRegex(EngagementNotFound, "not found"):
+            delete_engagement(connection, 7, assessment["id"])
+        connection.execute("DELETE FROM jobs WHERE id = 7")
+        connection.commit()
+        self.assertEqual(0, connection.execute("SELECT COUNT(*) FROM application_engagements").fetchone()[0])
+        connection.close()
+
+    def test_bounds_and_validates_records(self) -> None:
+        connection = self.connection_factory()
+        with self.assertRaisesRegex(ValueError, "name is required"):
+            create_engagement(connection, 7, self.payload(name="   "))
+        with patch.object(application_engagements_module, "MAX_ENGAGEMENTS_PER_JOB", 1):
+            create_engagement(connection, 7, self.payload())
+            with self.assertRaisesRegex(ValueError, "maximum of 1"):
+                create_engagement(connection, 7, self.payload(name="Second record"))
+        with self.assertRaisesRegex(EngagementNotFound, "Job not found"):
+            list_engagements(connection, 999)
+        connection.close()
+
+    def test_api_crud_and_application_count(self) -> None:
+        client = TestClient(app_module.app, base_url="http://127.0.0.1:8001")
+        headers = {"Origin": "http://127.0.0.1:8001"}
+        api_payload = {
+            **self.payload(),
+            "activity_on": "2026-08-08",
+            "next_action_on": "2026-08-12",
+        }
+        try:
+            with patch.object(app_module, "get_db_connection", side_effect=self.connection_factory):
+                created = client.post("/api/jobs/7/engagements", json=api_payload, headers=headers)
+                record_id = created.json()["id"]
+                listed = client.get("/api/jobs/7/engagements")
+                applications = client.get("/api/applications")
+                api_payload["status"] = "completed"
+                updated = client.put(
+                    f"/api/jobs/7/engagements/{record_id}", json=api_payload, headers=headers
+                )
+                deleted = client.delete(f"/api/jobs/7/engagements/{record_id}", headers=headers)
+                missing = client.get("/api/jobs/999/engagements")
+        finally:
+            client.close()
+
+        self.assertEqual(201, created.status_code)
+        self.assertEqual(1, listed.json()["count"])
+        self.assertEqual(1, applications.json()[0]["engagement_count"])
+        self.assertEqual("completed", updated.json()["status"])
+        self.assertEqual({"success": True, "deleted": record_id}, deleted.json())
+        self.assertEqual(404, missing.status_code)
 
 
 class ApplicationInsightsTests(unittest.TestCase):

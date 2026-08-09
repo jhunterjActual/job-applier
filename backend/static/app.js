@@ -27,6 +27,8 @@ let interviewPrepJobId = null;
 let interviewPrepSnapshot = "";
 let interviewPrepCompany = "";
 let interviewPrepPosition = "";
+let engagementJobId = null;
+let engagementRecords = [];
 
 // DOM Elements
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -251,6 +253,29 @@ const printInterviewPrepBtn = document.getElementById("print-interview-prep-btn"
 const interviewPrepPrint = document.getElementById("interview-prep-print");
 const interviewPrepPrintTitle = document.getElementById("interview-prep-print-title");
 const interviewPrepPrintContent = document.getElementById("interview-prep-print-content");
+const engagementModal = document.getElementById("engagement-modal");
+const engagementBody = document.querySelector("#engagement-modal .modal-body");
+const engagementJobLabel = document.getElementById("engagement-job-label");
+const engagementForm = document.getElementById("engagement-form");
+const engagementFormTitle = document.getElementById("engagement-form-title");
+const engagementFormStatus = document.getElementById("engagement-form-status");
+const engagementId = document.getElementById("engagement-id");
+const engagementType = document.getElementById("engagement-type");
+const engagementName = document.getElementById("engagement-name");
+const engagementOrganization = document.getElementById("engagement-organization");
+const engagementContact = document.getElementById("engagement-contact");
+const engagementStatus = document.getElementById("engagement-status");
+const engagementActivityOn = document.getElementById("engagement-activity-on");
+const engagementNextActionOn = document.getElementById("engagement-next-action-on");
+const engagementNotes = document.getElementById("engagement-notes");
+const engagementCount = document.getElementById("engagement-count");
+const engagementEmpty = document.getElementById("engagement-empty");
+const engagementList = document.getElementById("engagement-list");
+const cancelEngagementEditBtn = document.getElementById("cancel-engagement-edit-btn");
+const closeEngagementBtns = [
+    document.getElementById("close-engagement-modal"),
+    document.getElementById("close-engagement-modal-btn")
+].filter(Boolean);
 const openFullBackupBtn = document.getElementById("open-full-backup-btn");
 const fullBackupModal = document.getElementById("full-backup-modal");
 const fullBackupForm = document.getElementById("full-backup-form");
@@ -307,6 +332,9 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(saveInterviewPrepBtn, "click", saveInterviewPreparation);
     bindEvent(downloadInterviewPrepBtn, "click", downloadInterviewPreparation);
     bindEvent(printInterviewPrepBtn, "click", printInterviewPreparation);
+    bindEvent(engagementForm, "submit", saveEngagementRecord);
+    bindEvent(cancelEngagementEditBtn, "click", resetEngagementForm);
+    closeEngagementBtns.forEach(btn => btn.addEventListener("click", hideEngagementTracker));
     bindEvent(openFullBackupBtn, "click", showFullBackupModal);
     bindEvent(fullBackupForm, "submit", createFullBackup);
     bindEvent(document.getElementById("close-full-backup-modal"), "click", hideFullBackupModal);
@@ -365,6 +393,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (event.key === "Escape" && interviewPrepModal.classList.contains("active")) {
             requestCloseInterviewPrep();
+        }
+        if (event.key === "Escape" && engagementModal.classList.contains("active")) {
+            hideEngagementTracker();
         }
         if (event.key === "Escape" && fullBackupModal.classList.contains("active")) {
             hideFullBackupModal();
@@ -2643,6 +2674,187 @@ function printInterviewPreparation() {
     window.print();
 }
 
+const ENGAGEMENT_TYPE_LABELS = {
+    recruiter: "Recruiter",
+    hiring_manager: "Hiring manager",
+    referral: "Referral",
+    networking: "Networking",
+    assessment: "Assessment"
+};
+
+const ENGAGEMENT_STATUS_LABELS = {
+    planned: "Planned",
+    contacted: "Contacted",
+    waiting: "Waiting",
+    scheduled: "Scheduled",
+    completed: "Completed",
+    closed: "Closed"
+};
+
+function resetEngagementForm() {
+    engagementForm.reset();
+    engagementId.value = "";
+    engagementFormTitle.textContent = "Add a person or step";
+    engagementFormStatus.textContent = "";
+    cancelEngagementEditBtn.hidden = true;
+    engagementBody.scrollTop = 0;
+}
+
+function hideEngagementTracker() {
+    engagementModal.classList.remove("active");
+    engagementJobId = null;
+    engagementRecords = [];
+    resetEngagementForm();
+}
+
+function engagementDetail(label, value) {
+    const item = createElement("div", "engagement-detail");
+    item.append(
+        createElement("span", "engagement-detail-label", label),
+        createElement("span", "", value)
+    );
+    return item;
+}
+
+function renderEngagementRecords() {
+    engagementList.textContent = "";
+    engagementCount.textContent = String(engagementRecords.length);
+    engagementEmpty.hidden = engagementRecords.length > 0;
+
+    engagementRecords.forEach(record => {
+        const card = createElement("article", "engagement-card");
+        const header = createElement("div", "engagement-card-header");
+        const heading = createElement("div");
+        heading.appendChild(createElement("h4", "", String(record.name || "Untitled record")));
+        if (record.organization) {
+            heading.appendChild(createElement("p", "text-muted", String(record.organization)));
+        }
+        const badges = createElement("div", "engagement-badges");
+        badges.append(
+            createElement("span", "engagement-type-badge", ENGAGEMENT_TYPE_LABELS[record.engagement_type] || "Other"),
+            createElement("span", `engagement-status-badge status-${record.status}`, ENGAGEMENT_STATUS_LABELS[record.status] || "Unknown")
+        );
+        header.append(heading, badges);
+        card.appendChild(header);
+
+        const details = createElement("div", "engagement-details");
+        if (record.contact_details) details.appendChild(engagementDetail("Contact / reference", String(record.contact_details)));
+        if (record.activity_on) details.appendChild(engagementDetail("Activity", formatDisplayDate(record.activity_on)));
+        if (record.next_action_on) details.appendChild(engagementDetail("Next action", formatDisplayDate(record.next_action_on)));
+        if (details.childElementCount) card.appendChild(details);
+        if (record.notes) card.appendChild(createElement("p", "engagement-notes", String(record.notes)));
+
+        const actions = createElement("div", "engagement-card-actions");
+        actions.append(
+            createActionButton("Edit", "fa-solid fa-pen", "btn btn-secondary btn-sm", () => beginEngagementEdit(record.id), `Edit ${record.name}`),
+            createActionButton("Delete", "fa-solid fa-trash", "btn btn-danger btn-sm", () => removeEngagementRecord(record.id), `Delete ${record.name}`)
+        );
+        card.appendChild(actions);
+        engagementList.appendChild(card);
+    });
+}
+
+async function loadEngagementRecords() {
+    if (!engagementJobId) return;
+    const response = await fetch(`${API_URL}/api/jobs/${engagementJobId}/engagements`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Could not load people and application steps.");
+    engagementJobLabel.textContent = `${result.company || "Employer"} — ${result.position || "Role"}`;
+    engagementRecords = Array.isArray(result.engagements) ? result.engagements : [];
+    renderEngagementRecords();
+}
+
+async function openEngagementTracker(jobId) {
+    engagementJobId = Number(jobId);
+    engagementJobLabel.textContent = "Loading local records…";
+    engagementList.textContent = "";
+    engagementEmpty.hidden = true;
+    resetEngagementForm();
+    engagementModal.classList.add("active");
+    try {
+        await loadEngagementRecords();
+        engagementName.focus();
+    } catch (error) {
+        hideEngagementTracker();
+        alert(error.message);
+        logActivity("Tracking Records Unavailable", error.message, "error");
+    }
+}
+
+function beginEngagementEdit(recordId) {
+    const record = engagementRecords.find(item => Number(item.id) === Number(recordId));
+    if (!record) return;
+    engagementId.value = String(record.id);
+    engagementType.value = record.engagement_type || "recruiter";
+    engagementName.value = record.name || "";
+    engagementOrganization.value = record.organization || "";
+    engagementContact.value = record.contact_details || "";
+    engagementStatus.value = record.status || "planned";
+    engagementActivityOn.value = record.activity_on || "";
+    engagementNextActionOn.value = record.next_action_on || "";
+    engagementNotes.value = record.notes || "";
+    engagementFormTitle.textContent = "Edit person or step";
+    engagementFormStatus.textContent = "Editing a saved local record";
+    cancelEngagementEditBtn.hidden = false;
+    engagementName.focus();
+    engagementBody.scrollTop = 0;
+}
+
+async function saveEngagementRecord(event) {
+    event.preventDefault();
+    if (!engagementJobId) return;
+    const recordId = engagementId.value;
+    const payload = {
+        engagement_type: engagementType.value,
+        name: engagementName.value.trim(),
+        organization: engagementOrganization.value.trim(),
+        contact_details: engagementContact.value.trim(),
+        status: engagementStatus.value,
+        activity_on: engagementActivityOn.value || null,
+        next_action_on: engagementNextActionOn.value || null,
+        notes: engagementNotes.value.trim()
+    };
+    const endpoint = recordId
+        ? `${API_URL}/api/jobs/${engagementJobId}/engagements/${recordId}`
+        : `${API_URL}/api/jobs/${engagementJobId}/engagements`;
+    engagementFormStatus.textContent = "Saving locally…";
+    try {
+        const response = await fetch(endpoint, {
+            method: recordId ? "PUT" : "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not save this record.");
+        resetEngagementForm();
+        engagementFormStatus.textContent = "Saved locally";
+        await loadEngagementRecords();
+        await loadLogs();
+        logActivity("Application Tracking Updated", "A local relationship or application-step record was saved.", "success");
+    } catch (error) {
+        engagementFormStatus.textContent = error.message;
+        logActivity("Application Tracking Save Failed", error.message, "error");
+    }
+}
+
+async function removeEngagementRecord(recordId) {
+    if (!engagementJobId) return;
+    const record = engagementRecords.find(item => Number(item.id) === Number(recordId));
+    if (!record || !confirm(`Delete the local record for "${record.name}"?`)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/jobs/${engagementJobId}/engagements/${recordId}`, {method: "DELETE"});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not delete this record.");
+        if (engagementId.value === String(recordId)) resetEngagementForm();
+        await loadEngagementRecords();
+        await loadLogs();
+        logActivity("Application Tracking Updated", "A local relationship or application-step record was deleted.", "success");
+    } catch (error) {
+        alert(error.message);
+        logActivity("Application Tracking Delete Failed", error.message, "error");
+    }
+}
+
 // Load generated materials and manually maintained application history.
 async function loadLogs() {
     try {
@@ -2723,14 +2935,24 @@ async function loadLogs() {
 
             const prepCell = createElement("td");
             if (log.job_id) {
+                const prepActions = createElement("div", "file-actions");
                 const prepLabel = log.interview_prep ? "Open Prep" : "Interview Prep";
-                prepCell.appendChild(createActionButton(
+                prepActions.appendChild(createActionButton(
                     prepLabel,
                     "fa-solid fa-comments",
                     "btn btn-secondary btn-sm",
                     () => openInterviewPreparation(log.job_id),
                     "Open editable interview preparation"
                 ));
+                const engagementTotal = Number(log.engagement_count || 0);
+                prepActions.appendChild(createActionButton(
+                    engagementTotal ? `People & Steps (${engagementTotal})` : "People & Steps",
+                    "fa-solid fa-user-group",
+                    "btn btn-secondary btn-sm",
+                    () => openEngagementTracker(log.job_id),
+                    "Track recruiters, hiring managers, referrals, networking, and assessments"
+                ));
+                prepCell.appendChild(prepActions);
             } else {
                 prepCell.appendChild(createElement("span", "text-muted", "Unavailable"));
             }
