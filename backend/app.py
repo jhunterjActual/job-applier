@@ -57,7 +57,7 @@ from searcher import (
     run_job_search_and_matching,
     validate_public_http_url,
 )
-from utils import generate_resume_pdf
+from utils import generate_resume_pdf, resume_pdf_metadata
 from lifecycle import undo_latest_lifecycle_change, update_lifecycle
 from job_cleanup import apply_cleanup, cleanup_preview
 from job_suppressions import is_job_suppressed, record_job_suppression
@@ -103,7 +103,7 @@ from analytics import (
     source_category,
 )
 
-APP_BUILD = "20260808.17"
+APP_BUILD = "20260808.18"
 MAX_RESUME_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_RESUME_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -1693,7 +1693,12 @@ def _tailor_resume_endpoint(job_id: int, operation: OperationToken) -> dict:
     # Save the tailored resume PDF only when it satisfies the two-page contract.
     try:
         page_limit = 6 if (profile["resume_mode"] or "") == "academic_cv" else 2
-        pdf_result = generate_resume_pdf(res["tailored_resume"], str(temporary_resume_path), max_pages=page_limit)
+        pdf_result = generate_resume_pdf(
+            res["tailored_resume"],
+            str(temporary_resume_path),
+            max_pages=page_limit,
+            metadata=resume_pdf_metadata(profile["name"], job["title"], job["company"]),
+        )
         operation.checkpoint()
     except ValueError as exc:
         temporary_resume_path.unlink(missing_ok=True)
@@ -1897,7 +1902,7 @@ def _update_tailored_details(job_id: int, req: MaterialsUpdateRequest, operation
 
     conn = get_db_connection()
     application = conn.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)).fetchone()
-    profile = conn.execute("SELECT resume_mode FROM profile LIMIT 1").fetchone()
+    profile = conn.execute("SELECT name, resume_mode FROM profile LIMIT 1").fetchone()
     conn.close()
     if not application:
         raise HTTPException(status_code=404, detail="No tailored materials found for this job.")
@@ -1916,7 +1921,16 @@ def _update_tailored_details(job_id: int, req: MaterialsUpdateRequest, operation
         temporary_resume_path = Path(temporary_pdf.name)
     operation.track_temporary_file(temporary_resume_path)
     try:
-        pdf_result = generate_resume_pdf(resume_text, str(temporary_resume_path), max_pages=page_limit)
+        pdf_result = generate_resume_pdf(
+            resume_text,
+            str(temporary_resume_path),
+            max_pages=page_limit,
+            metadata=resume_pdf_metadata(
+                profile["name"] if profile else "",
+                application["position"],
+                application["company"],
+            ),
+        )
         operation.checkpoint()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1960,7 +1974,8 @@ def _application_materials(job_id: int):
     row = conn.execute(
         """
         SELECT a.*, j.company AS job_company, j.title AS job_title,
-               j.url AS job_url, j.source AS job_source, j.status AS job_status
+               j.url AS job_url, j.source AS job_source, j.status AS job_status,
+               (SELECT name FROM profile ORDER BY id LIMIT 1) AS candidate_name
         FROM applications a
         JOIN jobs j ON j.id = a.job_id
         WHERE a.job_id = ?
@@ -1993,7 +2008,8 @@ def download_tailored_resume(job_id: int) -> FileResponse:
         path,
         media_type="application/pdf",
         filename=material_download_name(
-            material["job_company"], material["job_title"], "resume", ".pdf"
+            material["job_company"], material["job_title"], "resume", ".pdf",
+            candidate_name=material["candidate_name"],
         ),
     )
 
@@ -2005,12 +2021,7 @@ def download_tailored_resume_docx(job_id: int) -> Response:
     resume_text = (material["tailored_resume_text"] or "").strip()
     if not resume_text:
         raise HTTPException(status_code=404, detail="The editable tailored resume source is unavailable.")
-    conn = get_db_connection()
-    try:
-        profile = conn.execute("SELECT name FROM profile WHERE id = 1").fetchone()
-    finally:
-        conn.close()
-    candidate_name = profile["name"] if profile and profile["name"] else ""
+    candidate_name = material["candidate_name"] or ""
     try:
         content = build_accessible_resume_docx(
             resume_text,
@@ -2020,7 +2031,8 @@ def download_tailored_resume_docx(job_id: int) -> Response:
     except ResumeDocumentError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     filename = material_download_name(
-        material["job_company"], material["job_title"], "resume-accessible", ".docx"
+        material["job_company"], material["job_title"], "resume-accessible", ".docx",
+        candidate_name=candidate_name,
     )
     capture_event(
         "material_downloaded",
@@ -2068,7 +2080,8 @@ def download_cover_letter(job_id: int) -> FileResponse:
         path,
         media_type="text/plain; charset=utf-8",
         filename=material_download_name(
-            material["job_company"], material["job_title"], "cover-letter", ".txt"
+            material["job_company"], material["job_title"], "cover-letter", ".txt",
+            candidate_name=material["candidate_name"],
         ),
     )
 

@@ -71,7 +71,7 @@ This backlog consolidates the code-review, job-seeker persona, product-owner, mo
 - [ ] Add an optional privacy-safe Sentry integration and operator setup guide. Keep local variables, request bodies, profile/resume content, job details, URLs, API keys, and generated materials out of events; document read-only Codex inspection credentials separately from the application DSN.
 - [x] Replace broad mutable dependency ranges with a reproducible, reviewed lock or constraints file and an intentional dependency-update workflow.
 - [ ] Add recruiter, hiring-manager, referral, assessment, and networking tracking.
-- [ ] Add PDF metadata, accessible document semantics, clickable contact links, and recruiter-friendly filenames.
+- [x] Add PDF metadata, accessible document semantics, clickable contact links, and recruiter-friendly filenames.
 
 ## P3 - Integrations, growth, and monetization enablement
 

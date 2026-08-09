@@ -2,6 +2,9 @@ import os
 import re
 import html
 from pathlib import Path
+from urllib.parse import urlsplit
+
+import pymupdf
 from config import get_gemini_api_key, get_google_maps_api_key
 from ai_providers import AIProviderSettings
 from maps_providers import (
@@ -12,13 +15,122 @@ from maps_providers import (
 )
 
 
+_PHONE_TOKEN = r"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)"
+_MARKDOWN_LINK_TOKEN = r"\[[^\]\n]+\]\(https?://[^\s)]+\)"
+_URL_TOKEN = r"(?:https?://|www\.|(?:linkedin|github)\.com/)[^\s<>()]+"
+_EMAIL_TOKEN = r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+_CONTACT_TOKEN = re.compile(
+    rf"({_MARKDOWN_LINK_TOKEN}|{_URL_TOKEN}|{_EMAIL_TOKEN}|{_PHONE_TOKEN})",
+    re.IGNORECASE,
+)
+_INLINE_TOKEN = re.compile(
+    rf"(\*\*[^*\n]+\*\*|(?<!\*)\*[^*\n]+\*(?!\*)|(?<!_)_[^_\n]+_(?!_)|"
+    rf"{_MARKDOWN_LINK_TOKEN}|{_URL_TOKEN}|{_EMAIL_TOKEN}|{_PHONE_TOKEN})",
+    re.IGNORECASE,
+)
+
+
+def _contact_link(token: str) -> str:
+    """Render a safe visible contact token as an external PDF hyperlink."""
+    markdown_link = re.fullmatch(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)", token, re.IGNORECASE)
+    if markdown_link:
+        label, target = markdown_link.groups()
+        return (
+            f'<a href="{html.escape(target, quote=True)}">'
+            f"{html.escape(label, quote=True)}</a>"
+        )
+
+    if re.fullmatch(_EMAIL_TOKEN, token, re.IGNORECASE):
+        return (
+            f'<a href="mailto:{html.escape(token, quote=True)}">'
+            f"{html.escape(token, quote=True)}</a>"
+        )
+    if re.fullmatch(_PHONE_TOKEN, token):
+        prefix = "+" if token.strip().startswith("+") else ""
+        digits = re.sub(r"[^0-9]", "", token)
+        return (
+            f'<a href="tel:{prefix}{digits}">'
+            f"{html.escape(token, quote=True)}</a>"
+        )
+
+    visible = token.rstrip(".,;:")
+    trailing = token[len(visible):]
+    target = visible if visible.lower().startswith(("http://", "https://")) else f"https://{visible}"
+    parsed = urlsplit(target)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return html.escape(token, quote=True)
+    return (
+        f'<a href="{html.escape(target, quote=True)}">'
+        f"{html.escape(visible, quote=True)}</a>{html.escape(trailing, quote=True)}"
+    )
+
+
+def _linkify_contacts(text: str) -> str:
+    output: list[str] = []
+    cursor = 0
+    for match in _CONTACT_TOKEN.finditer(text):
+        output.append(html.escape(text[cursor:match.start()], quote=True))
+        output.append(_contact_link(match.group(0)))
+        cursor = match.end()
+    output.append(html.escape(text[cursor:], quote=True))
+    return "".join(output)
+
+
 def _inline_markdown(text: str) -> str:
-    """Render the small, safe inline Markdown subset used in resumes."""
-    rendered = html.escape(text.strip(), quote=True)
-    rendered = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', rendered)
-    rendered = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'<em>\1</em>', rendered)
-    rendered = re.sub(r'(?<!_)_([^_]+?)_(?!_)', r'<em>\1</em>', rendered)
-    return rendered
+    """Render safe inline Markdown plus visible, clickable contact details."""
+    source = text.strip()
+    output: list[str] = []
+    cursor = 0
+    for match in _INLINE_TOKEN.finditer(source):
+        output.append(html.escape(source[cursor:match.start()], quote=True))
+        token = match.group(0)
+        if token.startswith("**"):
+            output.append(f"<strong>{_linkify_contacts(token[2:-2])}</strong>")
+        elif token.startswith("*") or (token.startswith("_") and token.endswith("_")):
+            output.append(f"<em>{_linkify_contacts(token[1:-1])}</em>")
+        else:
+            output.append(_contact_link(token))
+        cursor = match.end()
+    output.append(html.escape(source[cursor:], quote=True))
+    return "".join(output)
+
+
+def resume_pdf_metadata(candidate_name: str, job_title: str, company: str) -> dict[str, str]:
+    """Build bounded, recruiter-readable metadata for a job-specific resume PDF."""
+    def clean(value: str, limit: int = 240) -> str:
+        normalized = re.sub(r"[\x00-\x1f\x7f]+", " ", value or "")
+        return " ".join(normalized.split())[:limit]
+
+    candidate = clean(candidate_name) or "Candidate"
+    position = clean(job_title) or "Target Role"
+    employer = clean(company) or "Target Employer"
+    return {
+        "title": clean(f"{candidate} - {position} Resume"),
+        "author": candidate,
+        "subject": clean(f"Resume prepared for {position} at {employer}"),
+        "keywords": clean(f"resume, {position}, {employer}"),
+        "creator": "CareerTrellis",
+    }
+
+
+def _apply_pdf_metadata(pdf_bytes: bytes, metadata: dict[str, str]) -> tuple[bytes, int]:
+    """Add standard document properties without discarding Chromium's tagged structure."""
+    document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        page_count = document.page_count
+        existing = document.metadata or {}
+        allowed = (
+            "title", "author", "subject", "keywords", "creator", "producer",
+            "creationDate", "modDate", "trapped",
+        )
+        updated = {key: str(existing.get(key) or "") for key in allowed}
+        for key in ("title", "author", "subject", "keywords", "creator"):
+            if metadata.get(key):
+                updated[key] = metadata[key]
+        document.set_metadata(updated)
+        return document.tobytes(garbage=0, deflate=True), page_count
+    finally:
+        document.close()
 
 
 def markdown_to_html(md_text: str) -> str:
@@ -111,6 +223,7 @@ def generate_pdf_from_html(
     output_pdf_path: str,
     is_resume: bool = True,
     max_pages: int = 2,
+    metadata: dict[str, str] | None = None,
 ) -> dict:
     """
     Compiles an HTML body string with custom styles and prints it to a PDF
@@ -182,6 +295,12 @@ def generate_pdf_from_html(
         strong {
             color: #2d3748;
         }
+        a {
+            color: #1a365d;
+            text-decoration: underline;
+            text-decoration-thickness: 0.5pt;
+            text-underline-offset: 1.5pt;
+        }
         hr { display: none; }
         .resume-section { break-inside: auto; }
         .resume-entry { break-inside: avoid; }
@@ -194,11 +313,17 @@ def generate_pdf_from_html(
     </style>
     """
     
+    document_metadata = metadata or {}
+    default_title = "CareerTrellis Resume" if is_resume else "CareerTrellis Cover Letter"
     full_html = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="en-US">
     <head>
         <meta charset="utf-8">
+        <title>{html.escape(document_metadata.get('title', default_title), quote=True)}</title>
+        <meta name="author" content="{html.escape(document_metadata.get('author', ''), quote=True)}">
+        <meta name="description" content="{html.escape(document_metadata.get('subject', ''), quote=True)}">
+        <meta name="keywords" content="{html.escape(document_metadata.get('keywords', ''), quote=True)}">
         {style}
     </head>
     <body class="{'resume' if is_resume else 'cover-letter'}">
@@ -217,8 +342,14 @@ def generate_pdf_from_html(
             for compact in (False, True):
                 if compact:
                     page.evaluate("document.body.classList.add('compact')")
-                pdf_bytes = page.pdf(format="Letter", print_background=True, prefer_css_page_size=True)
-                page_count = len(re.findall(rb"/Type\s*/Page\b", pdf_bytes))
+                pdf_bytes = page.pdf(
+                    format="Letter",
+                    print_background=True,
+                    prefer_css_page_size=True,
+                    tagged=True,
+                    outline=True,
+                )
+                pdf_bytes, page_count = _apply_pdf_metadata(pdf_bytes, document_metadata)
                 if page_count <= max_pages:
                     output_path = Path(output_pdf_path)
                     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +362,13 @@ def generate_pdf_from_html(
         finally:
             browser.close()
 
-def generate_resume_pdf(markdown_text: str, output_pdf_path: str, max_pages: int = 2) -> dict:
+def generate_resume_pdf(
+    markdown_text: str,
+    output_pdf_path: str,
+    max_pages: int = 2,
+    *,
+    metadata: dict[str, str] | None = None,
+) -> dict:
     """
     Converts a Markdown tailored resume to HTML and compiles it to a PDF.
     
@@ -242,7 +379,13 @@ def generate_resume_pdf(markdown_text: str, output_pdf_path: str, max_pages: int
     html_body = markdown_to_html(markdown_text)
     
     # We can perform some custom structural cleanup if needed, but a clean markdown conversion is usually enough
-    return generate_pdf_from_html(html_body, output_pdf_path, is_resume=True, max_pages=max_pages)
+    return generate_pdf_from_html(
+        html_body,
+        output_pdf_path,
+        is_resume=True,
+        max_pages=max_pages,
+        metadata=metadata,
+    )
 
 def generate_cover_letter_pdf(cover_letter_text: str, output_pdf_path: str) -> dict:
     """

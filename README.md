@@ -153,9 +153,9 @@ If you prefer setting up manually or are on macOS/Linux:
    - Click **Search & Analyze**.
 3. **Tailor Materials**:
    - Under **Discovered Job Postings**, click **Tailor Materials** next to a matched job.
-   - Review your tailored resume and cover letter. Download either the two-page PDF or an editable, accessible DOCX with semantic headings, real lists, and clickable contact links.
+   - Review your tailored resume and cover letter. The two-page PDF includes recruiter-readable document properties, tagged headings/lists, an outline, and clickable contact details. The editable, accessible DOCX provides semantic headings, real lists, and clickable contact links as an alternative.
 4. **Apply**:
-   - Click **Apply Manually**, review and save edits, and download the **Resume PDF** or **Accessible DOCX** plus the **Cover Letter TXT**.
+   - Click **Apply Manually**, review and save edits, and download the **Resume PDF** or **Accessible DOCX** plus the **Cover Letter TXT**. Download names begin with your saved candidate name when available, followed by the employer, target role, and artifact type so recruiters can identify the files outside CareerTrellis.
    - Click **Open Application Site**, complete the employer's form yourself, and return to use **Mark Applied** with the correct date and method.
 
 ### Preview and clean up untouched jobs
