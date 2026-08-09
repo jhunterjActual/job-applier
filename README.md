@@ -65,7 +65,7 @@ The application features a **FastAPI backend** that doubles as a static file ser
 ## 🛠️ Architecture
 
 * **Frontend**: Vanilla HTML5, Vanilla CSS3 (custom dark-mode grid design, glassmorphic cards, transition glows), and Vanilla ES6+ JavaScript.
-* **Backend**: FastAPI (Python), SQLite (database), Playwright (scraping and browser control), the `google-genai` SDK, and the OpenAI Responses REST API.
+* **Backend**: FastAPI (Python), SQLite (database), Playwright (scraping and browser control), Cryptography for authenticated local backups, the `google-genai` SDK, and the OpenAI Responses REST API.
 
 ---
 
@@ -144,6 +144,8 @@ If you prefer setting up manually or are on macOS/Linux:
    - Click **Save Settings**. Meaningful name, mode, or content changes create a new version; unchanged saves do not duplicate history.
    - Use **History** to preview earlier versions and restore one non-destructively. A restore becomes a new version, and the app prevents deletion of your last base resume.
    - Use **Export My Data** to download a versioned JSON copy of your profile settings, resumes and history, jobs, applications, saved searches, deletion choices, and privacy-safe diagnostics. Stored API keys, generated-file paths, URL fingerprints, and provider caches are excluded. The file still contains personal data and should be kept private.
+   - Use **Encrypted Full Backup** when you need a restorable copy of the complete local workspace. It includes the SQLite database, saved API keys, and generated materials inside an authenticated AES-256-GCM archive protected by a password-derived key. CareerTrellis never stores the password; use at least 12 characters and keep the password separately.
+   - **Restore Full Backup** validates the password, authenticated archive, file inventory, checksums, database integrity, schema, and minimum compatible build before changing live data. Restore explicitly replaces the current database and generated-materials folder, while retaining the immediately preceding workspace under ignored local `data/restore-recovery/` storage for manual recovery. Finish other work before restoring, and periodically remove recovery copies you no longer need because they contain unencrypted local profile data and saved keys just like the live database.
 2. **Search for Jobs**:
    - Go to the **Search & Match** tab.
    - Enter search keywords (e.g. `"Enterprise Architect"`) or leave blank to use keywords auto-suggested from your resume.

@@ -251,6 +251,17 @@ const printInterviewPrepBtn = document.getElementById("print-interview-prep-btn"
 const interviewPrepPrint = document.getElementById("interview-prep-print");
 const interviewPrepPrintTitle = document.getElementById("interview-prep-print-title");
 const interviewPrepPrintContent = document.getElementById("interview-prep-print-content");
+const openFullBackupBtn = document.getElementById("open-full-backup-btn");
+const fullBackupModal = document.getElementById("full-backup-modal");
+const fullBackupForm = document.getElementById("full-backup-form");
+const fullBackupPassword = document.getElementById("full-backup-password");
+const fullBackupConfirmPassword = document.getElementById("full-backup-confirm-password");
+const openFullRestoreBtn = document.getElementById("open-full-restore-btn");
+const fullRestoreModal = document.getElementById("full-restore-modal");
+const fullRestoreForm = document.getElementById("full-restore-form");
+const fullRestoreFile = document.getElementById("full-restore-file");
+const fullRestorePassword = document.getElementById("full-restore-password");
+const fullRestoreConfirmReplace = document.getElementById("full-restore-confirm-replace");
 
 // Initialize on Load
 document.addEventListener("DOMContentLoaded", () => {
@@ -296,6 +307,14 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvent(saveInterviewPrepBtn, "click", saveInterviewPreparation);
     bindEvent(downloadInterviewPrepBtn, "click", downloadInterviewPreparation);
     bindEvent(printInterviewPrepBtn, "click", printInterviewPreparation);
+    bindEvent(openFullBackupBtn, "click", showFullBackupModal);
+    bindEvent(fullBackupForm, "submit", createFullBackup);
+    bindEvent(document.getElementById("close-full-backup-modal"), "click", hideFullBackupModal);
+    bindEvent(document.getElementById("cancel-full-backup-btn"), "click", hideFullBackupModal);
+    bindEvent(openFullRestoreBtn, "click", showFullRestoreModal);
+    bindEvent(fullRestoreForm, "submit", restoreFullBackup);
+    bindEvent(document.getElementById("close-full-restore-modal"), "click", hideFullRestoreModal);
+    bindEvent(document.getElementById("cancel-full-restore-btn"), "click", hideFullRestoreModal);
     window.addEventListener("afterprint", finishInterviewPrepPrint);
     
     // Modal controls
@@ -346,6 +365,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (event.key === "Escape" && interviewPrepModal.classList.contains("active")) {
             requestCloseInterviewPrep();
+        }
+        if (event.key === "Escape" && fullBackupModal.classList.contains("active")) {
+            hideFullBackupModal();
+        }
+        if (event.key === "Escape" && fullRestoreModal.classList.contains("active")) {
+            hideFullRestoreModal();
         }
     });
 });
@@ -639,6 +664,138 @@ async function stopActiveLoadingOperation() {
         );
         loadingTitle.innerText = "Still working...";
         loadingSubtitle.innerText = error.message || "The stop request could not be sent.";
+    }
+}
+
+function showFullBackupModal() {
+    fullBackupForm.reset();
+    fullBackupModal.classList.add("active");
+    window.setTimeout(() => fullBackupPassword.focus(), 0);
+}
+
+function hideFullBackupModal() {
+    fullBackupModal.classList.remove("active");
+    fullBackupForm.reset();
+}
+
+function showFullRestoreModal() {
+    fullRestoreForm.reset();
+    fullRestoreModal.classList.add("active");
+    window.setTimeout(() => fullRestoreFile.focus(), 0);
+}
+
+function hideFullRestoreModal() {
+    fullRestoreModal.classList.remove("active");
+    fullRestoreForm.reset();
+}
+
+async function backupResponseMessage(response, fallback) {
+    try {
+        const payload = await response.json();
+        return payload.detail || payload.message || fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+async function createFullBackup(event) {
+    event.preventDefault();
+    const password = fullBackupPassword.value;
+    if (password.length < 12) {
+        alert("Use at least 12 characters for the backup password.");
+        fullBackupPassword.focus();
+        return;
+    }
+    if (password !== fullBackupConfirmPassword.value) {
+        alert("The backup passwords do not match.");
+        fullBackupConfirmPassword.focus();
+        return;
+    }
+
+    const operation = showCancellableLoading(
+        "Creating Encrypted Backup...",
+        "Snapshotting the database, collecting generated materials, and encrypting the complete archive."
+    );
+    try {
+        const response = await fetch(`${API_URL}/api/full-backup`, {
+            method: "POST",
+            headers: operationHeaders(operation, { "Content-Type": "application/json" }),
+            body: JSON.stringify({ password })
+        });
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+            const result = await response.json();
+            if (result.cancelled) {
+                hideLoading();
+                alert(result.message || "Backup stopped before a download was created.");
+                return;
+            }
+            throw new Error(result.detail || result.message || "Could not create the encrypted backup.");
+        }
+        if (!response.ok) {
+            throw new Error(await backupResponseMessage(response, "Could not create the encrypted backup."));
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `career-trellis-full-backup-${todayIsoDate()}.ctbackup`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+        const warningCount = Number(response.headers.get("X-CareerTrellis-Backup-Warnings") || 0);
+        hideLoading();
+        hideFullBackupModal();
+        alert(warningCount
+            ? `Encrypted backup downloaded. ${warningCount} stale generated-file reference(s) were omitted from the portable snapshot.`
+            : "Encrypted full backup downloaded. Keep the backup and its password in separate safe locations.");
+    } catch (error) {
+        hideLoading();
+        alert(`Backup failed: ${error.message}`);
+    }
+}
+
+async function restoreFullBackup(event) {
+    event.preventDefault();
+    const file = fullRestoreFile.files && fullRestoreFile.files[0];
+    if (!file) {
+        alert("Choose a CareerTrellis .ctbackup file.");
+        return;
+    }
+    if (!fullRestoreConfirmReplace.checked) {
+        alert("Confirm that the current workspace will be replaced after validation.");
+        fullRestoreConfirmReplace.focus();
+        return;
+    }
+    const formData = new FormData();
+    formData.append("file", file, file.name);
+    formData.append("password", fullRestorePassword.value);
+    formData.append("confirm_replace", "true");
+    const operation = showCancellableLoading(
+        "Validating Encrypted Backup...",
+        "Authenticating every file and checking compatibility before the current workspace changes."
+    );
+    try {
+        const response = await fetch(`${API_URL}/api/full-backup/restore`, {
+            method: "POST",
+            headers: operationHeaders(operation),
+            body: formData
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || "Could not restore the encrypted backup.");
+        if (result.cancelled) {
+            hideLoading();
+            alert(result.message || "Restore stopped before the current workspace was replaced.");
+            return;
+        }
+        hideLoading();
+        hideFullRestoreModal();
+        alert(`${result.message}\n\nRecovery folder: data/restore-recovery/${result.recovery_folder}`);
+        window.location.reload();
+    } catch (error) {
+        hideLoading();
+        alert(`Restore failed: ${error.message}`);
     }
 }
 

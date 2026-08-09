@@ -19,7 +19,7 @@
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/index.css?v=20260808-16">
+    <link rel="stylesheet" href="/static/index.css?v=20260808-17">
 </head>
 <body>
     <div class="app-container">
@@ -420,9 +420,17 @@
                             <p>Download a versioned JSON copy of your profile settings, resumes and versions, jobs, applications, saved searches, deletion choices, and privacy-safe source diagnostics.</p>
                             <p class="form-help">Stored API keys, generated-file paths, URL fingerprints, and provider caches are excluded. The export still contains personal and job-search data, so keep it private.</p>
                         </div>
-                        <a class="btn btn-secondary" id="export-user-data-btn" href="/api/data-export" download>
-                            <i class="fa-solid fa-file-export" aria-hidden="true"></i> Export My Data
-                        </a>
+                        <div class="data-portability-actions">
+                            <a class="btn btn-secondary" id="export-user-data-btn" href="/api/data-export" download>
+                                <i class="fa-solid fa-file-export" aria-hidden="true"></i> Export My Data
+                            </a>
+                            <button type="button" class="btn btn-secondary" id="open-full-backup-btn">
+                                <i class="fa-solid fa-lock" aria-hidden="true"></i> Encrypted Full Backup
+                            </button>
+                            <button type="button" class="btn btn-secondary" id="open-full-restore-btn">
+                                <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> Restore Full Backup
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -676,6 +684,91 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <!-- Password-encrypted full backup -->
+    <div class="modal" id="full-backup-modal" role="dialog" aria-modal="true" aria-labelledby="full-backup-title">
+        <div class="modal-content modal-narrow-content">
+            <div class="modal-header">
+                <div>
+                    <h2 id="full-backup-title">Create Encrypted Full Backup</h2>
+                    <p class="text-muted">Database, settings, credentials, and generated materials</p>
+                </div>
+                <button type="button" class="close-modal-btn" id="close-full-backup-modal" aria-label="Close encrypted backup"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="full-backup-form">
+                <div class="modal-body">
+                    <div class="backup-security-notice">
+                        <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+                        <div>
+                            <strong>This backup includes saved API keys and personal data.</strong>
+                            <p>CareerTrellis encrypts and authenticates the entire backup before it is downloaded. The password is never saved and cannot be recovered.</p>
+                        </div>
+                    </div>
+                    <div class="form-group margin-top-md">
+                        <label for="full-backup-password">Backup password</label>
+                        <input type="password" id="full-backup-password" minlength="12" maxlength="1024" autocomplete="new-password" required aria-describedby="full-backup-password-help">
+                        <p class="form-help" id="full-backup-password-help">Use at least 12 characters and store the password separately from the backup.</p>
+                    </div>
+                    <div class="form-group margin-top-sm">
+                        <label for="full-backup-confirm-password">Confirm backup password</label>
+                        <input type="password" id="full-backup-confirm-password" minlength="12" maxlength="1024" autocomplete="new-password" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" id="cancel-full-backup-btn">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="create-full-backup-btn">
+                            <i class="fa-solid fa-download" aria-hidden="true"></i> Create &amp; Download
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Guarded full restore -->
+    <div class="modal" id="full-restore-modal" role="dialog" aria-modal="true" aria-labelledby="full-restore-title">
+        <div class="modal-content modal-narrow-content">
+            <div class="modal-header">
+                <div>
+                    <h2 id="full-restore-title">Restore Encrypted Full Backup</h2>
+                    <p class="text-muted">Replace this local CareerTrellis workspace</p>
+                </div>
+                <button type="button" class="close-modal-btn" id="close-full-restore-modal" aria-label="Close full restore"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="full-restore-form">
+                <div class="modal-body">
+                    <div class="backup-security-notice destructive-notice">
+                        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+                        <div>
+                            <strong>The restored backup will replace the current database and generated materials.</strong>
+                            <p>CareerTrellis validates and authenticates the whole backup first. It keeps the current workspace in a local recovery folder if replacement succeeds.</p>
+                        </div>
+                    </div>
+                    <div class="form-group margin-top-md">
+                        <label for="full-restore-file">Encrypted backup file</label>
+                        <input type="file" id="full-restore-file" accept=".ctbackup,application/vnd.careertrellis.backup" required>
+                    </div>
+                    <div class="form-group margin-top-sm">
+                        <label for="full-restore-password">Backup password</label>
+                        <input type="password" id="full-restore-password" maxlength="1024" autocomplete="current-password" required>
+                    </div>
+                    <label class="restore-confirmation margin-top-md" for="full-restore-confirm-replace">
+                        <input type="checkbox" id="full-restore-confirm-replace" required>
+                        <span>I understand that this restore replaces the current workspace after validation.</span>
+                    </label>
+                </div>
+                <div class="modal-footer">
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" id="cancel-full-restore-btn">Cancel</button>
+                        <button type="submit" class="btn btn-danger" id="restore-full-backup-btn">
+                            <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> Validate &amp; Restore
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
     </div>
 
     <!-- Manual job import -->
@@ -1074,6 +1167,6 @@
     </div>
     
     <!-- Custom JS -->
-    <script src="/static/app.js?v=20260808-16"></script>
+    <script src="/static/app.js?v=20260808-17"></script>
 </body>
 </html>

@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import app as app_module
 import ai_providers as ai_providers_module
+import backup_restore as backup_restore_module
 import maps_providers as maps_providers_module
 import database as database_module
 import materials as materials_module
@@ -21,6 +22,12 @@ import searcher as searcher_module
 import source_diagnostics as source_diagnostics_module
 from application_insights import build_application_insights
 from data_export import EXPORT_FORMAT, EXPORT_SCHEMA_VERSION, build_user_data_export
+from backup_restore import (
+    BackupAuthenticationError,
+    BackupCompatibilityError,
+    create_encrypted_backup,
+    restore_encrypted_backup,
+)
 import pymupdf
 from docx import Document as WordDocument
 from fastapi.testclient import TestClient
@@ -856,12 +863,16 @@ class FrontendStartupTests(unittest.TestCase):
             "save-interview-prep-btn", "download-interview-prep-btn",
             "print-interview-prep-btn", "interview-prep-print",
             "export-user-data-btn",
+            "open-full-backup-btn", "full-backup-modal", "full-backup-form",
+            "full-backup-password", "full-backup-confirm-password",
+            "open-full-restore-btn", "full-restore-modal", "full-restore-form",
+            "full-restore-file", "full-restore-password", "full-restore-confirm-replace",
         ):
             with self.subTest(element_id=element_id):
                 self.assertIn(f'id="{element_id}"', html_source)
         self.assertIn("Checking AI Provider", html_source)
-        self.assertIn("app.js?v=20260808-16", html_source)
-        self.assertIn("index.css?v=20260808-16", html_source)
+        self.assertIn("app.js?v=20260808-17", html_source)
+        self.assertIn("index.css?v=20260808-17", html_source)
 
     def test_launchers_require_the_current_backend_build(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -869,7 +880,7 @@ class FrontendStartupTests(unittest.TestCase):
             with self.subTest(launcher=launcher):
                 source = (project_dir / launcher).read_text(encoding="utf-8")
                 self.assertIn("/api/version", source)
-                self.assertIn("20260808.16", source)
+                self.assertIn("20260808.17", source)
 
     def test_advanced_job_filters_are_local_and_do_not_change_match_scores(self) -> None:
         project_dir = Path(__file__).parent.parent
@@ -1095,7 +1106,7 @@ class DependencyLockTests(unittest.TestCase):
 
         self.assertEqual(
             {
-                "exceptiongroup", "fastapi", "google-genai", "playwright", "posthog",
+                "cryptography", "exceptiongroup", "fastapi", "google-genai", "playwright", "posthog",
                 "pydantic", "pymupdf", "python-docx", "python-multipart", "uvicorn",
             },
             direct_names,
@@ -1599,6 +1610,238 @@ class UserDataExportTests(unittest.TestCase):
             r'^attachment; filename="career-trellis-user-data-\d{4}-\d{2}-\d{2}\.json"$',
         )
         self.assertIn('\n  "schema_version": 1,', response.text)
+
+
+class EncryptedFullBackupTests(unittest.TestCase):
+    PASSWORD = "correct horse battery staple"
+    BUILD = "20260808.17"
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def create_workspace(self, name: str, secret: str, material_text: str) -> tuple[Path, Path]:
+        workspace = self.root / name
+        output = workspace / "output"
+        output.mkdir(parents=True)
+        resume = output / "resume.pdf"
+        letter = output / "cover.txt"
+        resume.write_text(material_text, encoding="utf-8")
+        letter.write_text(f"Letter for {name}", encoding="utf-8")
+        database_path = workspace / "jobapplier.db"
+        connection = sqlite3.connect(database_path)
+        connection.executescript("""
+            CREATE TABLE profile (id INTEGER PRIMARY KEY, name TEXT, gemini_api_key TEXT);
+            CREATE TABLE jobs (id INTEGER PRIMARY KEY, title TEXT);
+            CREATE TABLE applications (
+                id INTEGER PRIMARY KEY, job_id INTEGER,
+                tailored_resume_path TEXT, cover_letter_path TEXT
+            );
+        """)
+        connection.execute("INSERT INTO profile VALUES (1, ?, ?)", (name, secret))
+        connection.execute("INSERT INTO jobs VALUES (1, ?)", (f"{name} role",))
+        connection.execute(
+            "INSERT INTO applications VALUES (1, 1, ?, ?)",
+            (str(resume.resolve()), str(letter.resolve())),
+        )
+        connection.commit()
+        connection.close()
+        return database_path, output
+
+    def profile(self, database_path: Path) -> tuple[str, str]:
+        connection = sqlite3.connect(database_path)
+        try:
+            return connection.execute("SELECT name, gemini_api_key FROM profile WHERE id = 1").fetchone()
+        finally:
+            connection.close()
+
+    def test_full_backup_is_encrypted_portable_and_restorable_with_recovery(self) -> None:
+        source_database, source_output = self.create_workspace(
+            "source", "source-api-secret", "source resume content"
+        )
+        destination_database, destination_output = self.create_workspace(
+            "current", "current-api-secret", "current resume content"
+        )
+        backup_path = self.root / "workspace.ctbackup"
+
+        summary = create_encrypted_backup(
+            backup_path,
+            self.PASSWORD,
+            database_path=source_database,
+            output_dir=source_output,
+            application_build=self.BUILD,
+            created_at="2026-08-08T12:00:00-04:00",
+        )
+
+        encrypted = backup_path.read_bytes()
+        self.assertTrue(encrypted.startswith(backup_restore_module.MAGIC))
+        self.assertNotIn(b"source-api-secret", encrypted)
+        self.assertNotIn(b"source resume content", encrypted)
+        self.assertEqual(2, summary.material_file_count)
+
+        recovery_root = self.root / "restore-recovery"
+        restored = restore_encrypted_backup(
+            backup_path,
+            self.PASSWORD,
+            database_path=destination_database,
+            output_dir=destination_output,
+            recovery_root=recovery_root,
+            application_build=self.BUILD,
+        )
+
+        self.assertEqual(("source", "source-api-secret"), self.profile(destination_database))
+        self.assertEqual("source resume content", (destination_output / "resume.pdf").read_text(encoding="utf-8"))
+        connection = sqlite3.connect(destination_database)
+        material_paths = connection.execute(
+            "SELECT tailored_resume_path, cover_letter_path FROM applications WHERE id = 1"
+        ).fetchone()
+        connection.close()
+        self.assertEqual(str((destination_output / "resume.pdf").resolve()), material_paths[0])
+        self.assertEqual(str((destination_output / "cover.txt").resolve()), material_paths[1])
+
+        recovery_directory = Path(restored.recovery_directory)
+        self.assertEqual(("current", "current-api-secret"), self.profile(recovery_directory / "database.sqlite3"))
+        self.assertEqual("current resume content", (recovery_directory / "output" / "resume.pdf").read_text(encoding="utf-8"))
+        marker = json.loads((recovery_directory / "recovery.json").read_text(encoding="utf-8"))
+        self.assertEqual("restore-complete", marker["status"])
+
+    def test_wrong_password_tampering_and_future_build_fail_before_replacement(self) -> None:
+        source_database, source_output = self.create_workspace("source", "secret", "source")
+        destination_database, destination_output = self.create_workspace("current", "keep-me", "current")
+        backup_path = self.root / "workspace.ctbackup"
+        create_encrypted_backup(
+            backup_path,
+            self.PASSWORD,
+            database_path=source_database,
+            output_dir=source_output,
+            application_build="20260808.99",
+        )
+
+        with self.assertRaises(BackupAuthenticationError):
+            restore_encrypted_backup(
+                backup_path,
+                "wrong password",
+                database_path=destination_database,
+                output_dir=destination_output,
+                recovery_root=self.root / "recovery-wrong-password",
+                application_build=self.BUILD,
+            )
+        self.assertEqual(("current", "keep-me"), self.profile(destination_database))
+
+        with self.assertRaises(BackupCompatibilityError):
+            restore_encrypted_backup(
+                backup_path,
+                self.PASSWORD,
+                database_path=destination_database,
+                output_dir=destination_output,
+                recovery_root=self.root / "recovery-future-build",
+                application_build=self.BUILD,
+            )
+        self.assertEqual(("current", "keep-me"), self.profile(destination_database))
+
+        contents = bytearray(backup_path.read_bytes())
+        contents[-20] ^= 0x01
+        backup_path.write_bytes(contents)
+        with self.assertRaises(BackupAuthenticationError):
+            restore_encrypted_backup(
+                backup_path,
+                self.PASSWORD,
+                database_path=destination_database,
+                output_dir=destination_output,
+                recovery_root=self.root / "recovery-tampered",
+                application_build="20260808.99",
+            )
+        self.assertEqual(("current", "keep-me"), self.profile(destination_database))
+
+    def test_failed_post_restore_check_rolls_back_the_previous_workspace(self) -> None:
+        source_database, source_output = self.create_workspace("source", "new-secret", "new")
+        destination_database, destination_output = self.create_workspace("current", "keep-me", "current")
+        backup_path = self.root / "workspace.ctbackup"
+        create_encrypted_backup(
+            backup_path,
+            self.PASSWORD,
+            database_path=source_database,
+            output_dir=source_output,
+            application_build=self.BUILD,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "migration failed"):
+            restore_encrypted_backup(
+                backup_path,
+                self.PASSWORD,
+                database_path=destination_database,
+                output_dir=destination_output,
+                recovery_root=self.root / "recovery-rollback",
+                application_build=self.BUILD,
+                post_restore_check=lambda: (_ for _ in ()).throw(RuntimeError("migration failed")),
+            )
+
+        self.assertEqual(("current", "keep-me"), self.profile(destination_database))
+        self.assertEqual("current", (destination_output / "resume.pdf").read_text(encoding="utf-8"))
+        marker_files = list((self.root / "recovery-rollback").glob("*/recovery.json"))
+        self.assertEqual(1, len(marker_files))
+        self.assertEqual(
+            "restore-rolled-back",
+            json.loads(marker_files[0].read_text(encoding="utf-8"))["status"],
+        )
+
+    def test_backup_and_restore_endpoints_require_guardrails(self) -> None:
+        client = TestClient(app_module.app, base_url="http://127.0.0.1:8001")
+        data_directory = self.root / "api-data"
+        output_directory = data_directory / "output"
+        output_directory.mkdir(parents=True)
+        database_path = data_directory / "jobapplier.db"
+        database_path.write_bytes(b"placeholder")
+
+        def fake_backup(destination, *_args, **_kwargs):
+            Path(destination).write_bytes(b"authenticated backup")
+            return unittest.mock.Mock(material_file_count=2, warning_count=0)
+
+        restored = unittest.mock.Mock(
+            backup_created_at="2026-08-08T12:00:00",
+            backup_application_build=self.BUILD,
+            material_file_count=2,
+            recovery_directory=str(data_directory / "restore-recovery" / "safe-copy"),
+        )
+        try:
+            with (
+                patch.object(app_module.config, "DATA_DIR", data_directory),
+                patch.object(app_module.config, "DB_PATH", database_path),
+                patch.object(app_module.config, "OUTPUT_DIR", output_directory),
+                patch.object(app_module, "create_encrypted_backup", side_effect=fake_backup),
+            ):
+                response = client.post("/api/full-backup", json={"password": self.PASSWORD})
+            self.assertEqual(200, response.status_code)
+            self.assertEqual(b"authenticated backup", response.content)
+            self.assertEqual("no-store", response.headers["cache-control"])
+            self.assertIn("career-trellis-full-backup-", response.headers["content-disposition"])
+
+            response = client.post(
+                "/api/full-backup/restore",
+                data={"password": self.PASSWORD, "confirm_replace": "false"},
+                files={"file": ("backup.ctbackup", b"backup", "application/octet-stream")},
+            )
+            self.assertEqual(400, response.status_code)
+
+            with (
+                patch.object(app_module.config, "DATA_DIR", data_directory),
+                patch.object(app_module.config, "DB_PATH", database_path),
+                patch.object(app_module.config, "OUTPUT_DIR", output_directory),
+                patch.object(app_module, "restore_encrypted_backup", return_value=restored) as restore_mock,
+            ):
+                response = client.post(
+                    "/api/full-backup/restore",
+                    data={"password": self.PASSWORD, "confirm_replace": "true"},
+                    files={"file": ("backup.ctbackup", b"backup", "application/octet-stream")},
+                )
+            self.assertEqual(200, response.status_code)
+            self.assertEqual("safe-copy", response.json()["recovery_folder"])
+            self.assertTrue(restore_mock.called)
+        finally:
+            client.close()
 
 
 class ManualJobImportTests(unittest.TestCase):
